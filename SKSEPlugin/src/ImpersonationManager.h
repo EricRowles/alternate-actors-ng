@@ -64,6 +64,8 @@ namespace AlternateActors {
         void OnRevert();
         void OnPostLoadGame();
 
+        static RE::BGSVoiceType* GetNPCVoiceType(const RE::TESNPC* a_npc);
+
     private:
         ImpersonationManager() = default;
         ~ImpersonationManager() = default;
@@ -71,6 +73,9 @@ namespace AlternateActors {
         ImpersonationManager& operator=(const ImpersonationManager&) = delete;
 
         void InstallHooks();
+        static RE::BGSVoiceType* Hook_GetObjectVoiceType(const RE::TESNPC* a_this);
+        inline static REL::Relocation<decltype(Hook_GetObjectVoiceType)> _origGetObjectVoiceType;
+
         void RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player);
         void RestorePackages();
         void CheckAndRetargetLocation(

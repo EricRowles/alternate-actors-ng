@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "FaceManager.h"
 #include "IdleAIManager.h"
+#include "ImpersonationManager.h"
 #include "RE/B/BSFaceGenNiNode.h"
 #include "RE/N/NiCloningProcess.h"
 #include "RE/B/BSVisit.h"
@@ -28,14 +29,8 @@ namespace AlternateActors {
         a_outSnapshot.sex = npc->GetSex();
         a_outSnapshot.bodyTintColor = npc->bodyTintColor;
 
-        bool isFemale = (a_outSnapshot.sex == RE::SEX::kFemale);
-
         // Voice Type resolution
-        a_outSnapshot.voiceType = npc->GetVoiceType();
-        if (!a_outSnapshot.voiceType && a_outSnapshot.race) {
-            std::size_t sexIdx = isFemale ? 1 : 0;
-            a_outSnapshot.voiceType = a_outSnapshot.race->defaultVoiceTypes[sexIdx];
-        }
+        a_outSnapshot.voiceType = ImpersonationManager::GetNPCVoiceType(npc);
 
         if (npc->headRelatedData) {
             a_outSnapshot.hairColor = npc->headRelatedData->hairColor;

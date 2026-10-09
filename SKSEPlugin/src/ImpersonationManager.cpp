@@ -20,6 +20,51 @@
 namespace AlternateActors {
 
     static std::array<RE::SCRIPT_FUNCTION::Condition_t*, 0x300> s_originalConditions{ nullptr };
+    static std::array<RE::SCRIPT_FUNCTION::Execute_t*, 0x300> s_originalExecutes{ nullptr };
+
+    template <std::uint16_t ID>
+    static bool IdentityExecuteThunk(
+        const RE::SCRIPT_PARAMETER* a_paramInfo,
+        RE::SCRIPT_FUNCTION::ScriptData* a_scriptData,
+        RE::TESObjectREFR* a_thisObj,
+        RE::TESObjectREFR* a_containingObj,
+        RE::Script* a_scriptObj,
+        RE::ScriptLocals* a_locals,
+        double& a_result,
+        std::uint32_t& a_opcodeOffsetPtr)
+    {
+        auto& mgr = ImpersonationManager::GetSingleton();
+        auto* orig = s_originalExecutes[ID];
+        if (!mgr.IsConditionsEnabled()) {
+            return orig ? orig(a_paramInfo, a_scriptData, a_thisObj, a_containingObj, a_scriptObj, a_locals, a_result, a_opcodeOffsetPtr) : false;
+        }
+
+        auto* player = mgr.GetPlayer();
+        auto* donor = mgr.GetDonor();
+
+        double res = 0.0;
+        std::uint32_t offset = a_opcodeOffsetPtr;
+        bool ok = orig ? orig(a_paramInfo, a_scriptData, a_thisObj, a_containingObj, a_scriptObj, a_locals, res, offset) : false;
+        if (ok && res != 0.0) {
+            a_result = res;
+            a_opcodeOffsetPtr = offset;
+            return true;
+        }
+
+        if (a_thisObj && a_thisObj == player && donor) {
+            double donorRes = 0.0;
+            std::uint32_t donorOffset = a_opcodeOffsetPtr;
+            if (orig && orig(a_paramInfo, a_scriptData, donor, a_containingObj, a_scriptObj, a_locals, donorRes, donorOffset) && donorRes != 0.0) {
+                a_result = donorRes;
+                a_opcodeOffsetPtr = donorOffset;
+                return true;
+            }
+        }
+
+        a_result = res;
+        a_opcodeOffsetPtr = offset;
+        return ok;
+    }
 
     // --- Category A: Identity Thunk ---
     template <std::uint16_t ID>
@@ -167,8 +212,52 @@ namespace AlternateActors {
         return orig ? orig(effectiveThis, effectiveP1, a_p2, a_result) : false;
     }
 
+    RE::BGSVoiceType* ImpersonationManager::GetNPCVoiceType(const RE::TESNPC* a_npc) {
+        if (!a_npc) return nullptr;
+        // 1. Direct member variable access (avoids any vtable dispatch mismatch)
+        if (a_npc->voiceType) return a_npc->voiceType;
+        // 2. Real engine function via original function pointer
+        if (_origGetObjectVoiceType.address() != 0) {
+            return _origGetObjectVoiceType(a_npc);
+        }
+        // 3. Race default fallback
+        if (a_npc->race) {
+            std::size_t sexIdx = (a_npc->GetSex() == RE::SEX::kFemale) ? 1 : 0;
+            return a_npc->race->defaultVoiceTypes[sexIdx];
+        }
+        return nullptr;
+    }
+
+    RE::BGSVoiceType* ImpersonationManager::Hook_GetObjectVoiceType(const RE::TESNPC* a_this) {
+        if (a_this) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player && a_this == player->GetActorBase()) {
+                auto& mgr = ImpersonationManager::GetSingleton();
+                if (mgr.IsActive()) {
+                    if (auto* donor = mgr.GetDonor(); donor && donor != player) {
+                        if (auto* donorBase = donor->GetActorBase()) {
+                            if (auto* vt = GetNPCVoiceType(donorBase)) {
+                                return vt;
+                            }
+                        }
+                    }
+                    if (a_this->voiceType) {
+                        return a_this->voiceType;
+                    }
+                }
+            }
+        }
+        return _origGetObjectVoiceType(a_this);
+    }
+
     void ImpersonationManager::InstallHooks() {
         if (_hooksInstalled) return;
+
+        // Hook TESNPC::GetObjectVoiceType on primary vtable (index 0x49)
+        REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_TESNPC[0] };
+        _origGetObjectVoiceType = vtbl.write_vfunc(0x49, &Hook_GetObjectVoiceType);
+        SKSE::log::info("Hooked TESNPC::GetObjectVoiceType at VTABLE_TESNPC[0] idx 0x49 (orig: {:016X})",
+            _origGetObjectVoiceType.address());
 
         auto* commands = RE::SCRIPT_FUNCTION::GetFirstScriptCommand();
         if (!commands) {
@@ -186,12 +275,28 @@ namespace AlternateActors {
             REL::safe_write(reinterpret_cast<std::uintptr_t>(&commands[id].conditionFunction), reinterpret_cast<std::uintptr_t>(newFunc));
         };
 
-        // Category A - Identity
+        auto hookExecute = [&](std::uint16_t id, RE::SCRIPT_FUNCTION::Execute_t* newFunc) {
+            if (id >= s_originalExecutes.size()) return;
+            if (!commands[id].executeFunction) {
+                SKSE::log::warn("Script command ID {} has no executeFunction, skipping hook.", id);
+                return;
+            }
+            s_originalExecutes[id] = commands[id].executeFunction;
+            REL::safe_write(reinterpret_cast<std::uintptr_t>(&commands[id].executeFunction), reinterpret_cast<std::uintptr_t>(newFunc));
+        };
+
+        // Category A - Identity (Conditions + Console Command Execution)
         hook(72, IdentityThunk<72>);    // GetIsID
         hook(136, IdentityThunk<136>);  // GetIsReference
         hook(372, IdentityThunk<372>);  // IsInList
         hook(426, IdentityThunk<426>);  // GetIsVoiceType
         hook(566, IdentityThunk<566>);  // GetIsAliasRef
+
+        hookExecute(72, IdentityExecuteThunk<72>);    // GetIsID
+        hookExecute(136, IdentityExecuteThunk<136>);  // GetIsReference
+        hookExecute(372, IdentityExecuteThunk<372>);  // IsInList
+        hookExecute(426, IdentityExecuteThunk<426>);  // GetIsVoiceType
+        hookExecute(566, IdentityExecuteThunk<566>);  // GetIsAliasRef
 
         // Category B - Spatial
         hook(1, SpatialThunk<1, SpatialMode::kThisAndP1>);      // GetDistance
@@ -222,7 +327,7 @@ namespace AlternateActors {
         hook(618, RelationshipThunk<618>);  // HasFamilyRelationshipAny
 
         _hooksInstalled = true;
-        SKSE::log::info("Installed 24 Impersonation condition function hooks successfully.");
+        SKSE::log::info("Installed 24 Impersonation condition function hooks, 5 console execution hooks, and GetObjectVoiceType vfunc hook successfully.");
     }
 
     void ImpersonationManager::Initialize() {
