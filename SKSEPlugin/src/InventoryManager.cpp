@@ -293,10 +293,12 @@ namespace AlternateActors {
     }
 
     bool InventoryManager::RestoreAndTransferFromPlayer(RE::Actor* a_player, RE::Actor* a_donor, RE::Actor* a_storageFollower) {
-        if (!a_player || !a_donor) return false;
+        if (!a_player) return false;
 
-        // 1. Return items from player to donor
-        TransferAllItems(a_player, a_donor, true);
+        // 1. Return items from player to donor (if donor is valid)
+        if (a_donor) {
+            TransferAllItems(a_player, a_donor, true);
+        }
 
         // 2. Remove copied donor spells from player
         RemoveCopiedSpells(a_player);

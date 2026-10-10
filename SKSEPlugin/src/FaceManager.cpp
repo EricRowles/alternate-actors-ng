@@ -309,26 +309,14 @@ namespace AlternateActors {
             }
         }
 
-        // Apply face skin tint directly to face / head geometries
-        RE::NiColor skinTint;
-        bool hasSkinTint = false;
-        if (a_snapshot.hasSkinTintColor) {
-            skinTint = a_snapshot.skinTintColor;
-            hasSkinTint = true;
-        } else if (a_snapshot.bodyTintColor.red != 0 || a_snapshot.bodyTintColor.green != 0 || a_snapshot.bodyTintColor.blue != 0) {
-            skinTint.red = static_cast<float>(a_snapshot.bodyTintColor.red) / 255.0f;
-            skinTint.green = static_cast<float>(a_snapshot.bodyTintColor.green) / 255.0f;
-            skinTint.blue = static_cast<float>(a_snapshot.bodyTintColor.blue) / 255.0f;
-            hasSkinTint = true;
-        }
-
-        if (hasSkinTint && a_targetActor->Get3D()) {
+        // Apply face skin tint directly to face / head geometries ONLY if validly captured from donor's face 3D
+        if (a_snapshot.hasSkinTintColor && a_targetActor->Get3D()) {
             RE::BSVisit::TraverseScenegraphGeometries(a_targetActor->Get3D(), [&](RE::BSGeometry* geom) {
                 if (geom) {
                     auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
                     if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
                         if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
-                            faceMat->tintColor = skinTint;
+                            faceMat->tintColor = a_snapshot.skinTintColor;
                         }
                     }
                 }

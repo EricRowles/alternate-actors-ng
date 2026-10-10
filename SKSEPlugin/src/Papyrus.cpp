@@ -11,14 +11,6 @@
 
 namespace AlternateActors::Papyrus {
 
-    std::int32_t SwapAliases(RE::StaticFunctionTag*, RE::Actor* a_donor, RE::Actor* a_player) {
-        return AliasManager::GetSingleton().SwapAliasesToPlayer(a_donor, a_player);
-    }
-
-    std::int32_t RevertAliases(RE::StaticFunctionTag*) {
-        return AliasManager::GetSingleton().RestoreAliases();
-    }
-
     bool CloneAppearance(RE::StaticFunctionTag*, RE::Actor* a_donor, RE::Actor* a_target) {
         return FaceManager::GetSingleton().CloneAppearance(a_donor, a_target);
     }
@@ -65,10 +57,6 @@ namespace AlternateActors::Papyrus {
 
     void SetIdleAITimeout(RE::StaticFunctionTag*, float a_seconds) {
         IdleAIManager::GetSingleton().SetIdleTimeout(a_seconds);
-    }
-
-    bool IsIdleAIActive(RE::StaticFunctionTag*) {
-        return IdleAIManager::GetSingleton().IsAIActive();
     }
 
     void SetControllingNPC(RE::StaticFunctionTag*, bool a_controlling) {
@@ -124,14 +112,6 @@ namespace AlternateActors::Papyrus {
         ImpersonationManager::GetSingleton().SetOptions(a_conditions, a_aliases, a_packages, a_scripts);
     }
 
-    bool IsImpersonating(RE::StaticFunctionTag*) {
-        return ImpersonationManager::GetSingleton().IsActive();
-    }
-
-    RE::Actor* GetImpersonatedActor(RE::StaticFunctionTag*) {
-        return ImpersonationManager::GetSingleton().GetDonor();
-    }
-
     void SetPuppetActor(RE::StaticFunctionTag*, RE::Actor* a_puppet) {
         ImpersonationManager::GetSingleton().SetPuppet(a_puppet);
     }
@@ -144,8 +124,6 @@ namespace AlternateActors::Papyrus {
 
         constexpr std::string_view className = "AK_NG";
 
-        a_vm->RegisterFunction("SwapAliases", className, SwapAliases);
-        a_vm->RegisterFunction("RevertAliases", className, RevertAliases);
         a_vm->RegisterFunction("CloneAppearance", className, CloneAppearance);
         a_vm->RegisterFunction("CopyAppearance", className, CopyAppearance);
         a_vm->RegisterFunction("RevertAppearance", className, RevertAppearance);
@@ -158,7 +136,6 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("RestoreStats", className, RestoreStats);
         a_vm->RegisterFunction("SetIdleAIEnabled", className, SetIdleAIEnabled);
         a_vm->RegisterFunction("SetIdleAITimeout", className, SetIdleAITimeout);
-        a_vm->RegisterFunction("IsIdleAIActive", className, IsIdleAIActive);
         a_vm->RegisterFunction("SetControllingNPC", className, SetControllingNPC);
         a_vm->RegisterFunction("UpdateIdleAI", className, UpdateIdleAI);
         a_vm->RegisterFunction("OpenSelfDialogue", className, OpenSelfDialogue);
@@ -167,8 +144,6 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("BeginImpersonation", className, BeginImpersonation);
         a_vm->RegisterFunction("EndImpersonation", className, EndImpersonation);
         a_vm->RegisterFunction("SetImpersonationOptions", className, SetImpersonationOptions);
-        a_vm->RegisterFunction("IsImpersonating", className, IsImpersonating);
-        a_vm->RegisterFunction("GetImpersonatedActor", className, GetImpersonatedActor);
         a_vm->RegisterFunction("SetPuppetActor", className, SetPuppetActor);
         a_vm->RegisterFunction("GetOriginalPlayerName", className, GetOriginalPlayerName);
 

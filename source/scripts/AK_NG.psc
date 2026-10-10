@@ -1,14 +1,6 @@
 ; Native bridge for Alternate Actors NG SKSE64 Plugin
 Scriptname AK_NG Hidden
 
-; Redirects all running quest aliases currently referencing akDonor to point to akPlayer instead.
-; Returns the number of aliases successfully redirected.
-Int Function SwapAliases(Actor akDonor, Actor akPlayer) Global Native
-
-; Restores all previously redirected quest aliases back to their original actor references.
-; Returns the number of aliases successfully restored.
-Int Function RevertAliases() Global Native
-
 ; Instantly copies full facial structure, headparts, hair color, race, skin, and tints from akDonor to akTarget.
 ; Automatically saves akTarget's previous appearance for restoration.
 Bool Function CloneAppearance(Actor akDonor, Actor akTarget) Global Native
@@ -51,9 +43,6 @@ Function SetIdleAIEnabled(Bool abEnabled) Global Native
 ; Sets the idle timeout in seconds before autonomous AI pathing begins (default 10.0s).
 Function SetIdleAITimeout(Float afSeconds) Global Native
 
-; Returns whether autonomous idle AI is currently active on the controlled player.
-Bool Function IsIdleAIActive() Global Native
-
 ; Sets whether the player is currently actively controlling an alternate NPC.
 Function SetControllingNPC(Bool abControlling) Global Native
 
@@ -77,12 +66,6 @@ Int Function EndImpersonation() Global Native
 
 ; Configures which impersonation layers are active (Conditions, Aliases, Packages, Scripts).
 Function SetImpersonationOptions(Bool abConditions, Bool abAliases, Bool abPackages, Bool abScripts) Global Native
-
-; Returns whether impersonation is currently active.
-Bool Function IsImpersonating() Global Native
-
-; Returns the currently impersonated donor actor, or None if inactive.
-Actor Function GetImpersonatedActor() Global Native
 
 ; Registers the active puppet actor holding the player's true appearance/identity.
 Function SetPuppetActor(Actor akPuppet) Global Native
