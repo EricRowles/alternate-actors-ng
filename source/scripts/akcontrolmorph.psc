@@ -1,24 +1,25 @@
 Scriptname AKControlMorph extends ActiveMagicEffect  
-;This script allows the player to morph into the target
+; This script allows the player to morph into the target
 AKControlQuestScript property akquest Auto
-AK__QF_AKControlQuest_01000D92 Property akcontrolquest Auto
 bool property duration Auto
 
 Event OnEffectStart(Actor akTarget, Actor akCaster)
-	Actor puppet = None
-	If akcontrolquest
-		puppet = akcontrolquest.Alias_ControlTemp.GetReference() as Actor
+	If !akquest
+		Return
 	EndIf
-	If !puppet && akquest
+
+	Actor puppet = None
+	ReferenceAlias puppetAlias = akquest.GetControlTempAlias()
+	If puppetAlias
+		puppet = puppetAlias.GetReference() as Actor
+	EndIf
+	If !puppet
 		puppet = akquest.akcontroltemp
 	EndIf
-	If akTarget == puppet || (akquest && (akTarget == akquest.akcontroltemp || akTarget == akquest.akcontroltempmale || akTarget == akquest.akcontroltempFemale || (akquest.MainChar == False && akTarget == akquest.Playerref)))
-		If akquest
-			akquest.akrevert(akcaster)
-		EndIf
+
+	If akTarget == puppet || akTarget == akquest.akcontroltempmale || akTarget == akquest.akcontroltempFemale || (!akquest.MainChar && akTarget == akquest.Playerref)
+		akquest.akrevert(akcaster)
 	Else
-		If akquest
-			akquest.AKMorphComplete(aktarget, akcaster, duration)
-		EndIf
+		akquest.AKMorphComplete(akTarget, akcaster, duration)
 	EndIf
 EndEvent

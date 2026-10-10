@@ -1,10 +1,10 @@
 # Alternate Actors NG
 
-So here's a question: why doesn't Jarl Elesif clear out wolfskull cave herself?
+So here's a question: why doesn't Jarl Elisif clear out wolfskull cave herself?
 
-You might be thinking "because that's stupid, she's not a combatant, and she has people for that. She wouldn't even want to clear out the cave."
+You might be thinking "Because she's not a combatant, and she's busy ruling Solitude. She wouldn't want to clear out the cave even if she could."
 
-Wrong, totally wrong. If Elesif was allowed to clear out the cave, she would absolutely do it. With her bare hands, if necessary. But the game's limitations hold her back. This mod removes those limitations.
+Wrong, totally wrong. If Elisif was allowed to clear out the cave, she would absolutely do it. With her bare hands, if necessary. But the game's limitations hold her back. This mod removes those limitations.
 
 Play as any NPC in the game, so they can solve their own dang problems for once.
 

@@ -242,22 +242,19 @@ namespace AlternateActors {
         targetNPC->defaultPackList = a_snapshot.defaultPackList;
         targetNPC->aiData = a_snapshot.aiData;
 
+        // Preserve donor's exact package priority order (head-to-tail)
         targetNPC->aiPackages.packages.clear();
-        for (auto* pkg : a_snapshot.packages) {
-            if (pkg) {
-                targetNPC->aiPackages.packages.push_front(pkg);
+        for (auto it = a_snapshot.packages.rbegin(); it != a_snapshot.packages.rend(); ++it) {
+            if (*it) {
+                targetNPC->aiPackages.packages.push_front(*it);
             }
         }
-        auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x0001B619);
-        if (defaultSandbox) {
-            if (targetNPC->aiPackages.packages.empty()) {
+
+        // Only add default sandbox fallback if the NPC has no AI packages defined
+        if (targetNPC->aiPackages.packages.empty() && !targetNPC->defaultPackList) {
+            auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x0001B619);
+            if (defaultSandbox) {
                 targetNPC->aiPackages.packages.push_front(defaultSandbox);
-            } else {
-                auto last = targetNPC->aiPackages.packages.begin();
-                for (auto it = targetNPC->aiPackages.packages.begin(); it != targetNPC->aiPackages.packages.end(); ++it) {
-                    last = it;
-                }
-                targetNPC->aiPackages.packages.insert_after(last, defaultSandbox);
             }
         }
 

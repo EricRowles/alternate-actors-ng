@@ -10,7 +10,6 @@ ObjectReference property AKControlCloneMarker auto		; where to hide the nonused 
 ObjectReference property AKControlCloneMarkerTemp auto	; temp use to mark where an NPC is
 
 spell property akcontrolrevertspell auto
-spell property akCstopcombatspell auto
 Spell Property akcontrolmorphspell Auto
 
 actor property akcontroltemp auto 			; used by spells to agree on the temp actor
@@ -21,10 +20,6 @@ actor Property Playerref Auto				; the player!
 
 bool property MainChar = True Auto			; is the player playing the MainChar or someone else?
 bool property inprogress Auto				; is the player in progress to playing as someone else?
-bool property inracemenu Auto				; used to loop racemenu until it works
-Int property akisdead auto					; is the main character dead? 0 = no, 1 = recently dead, 2 = dead
-
-Faction Property CharmFaction Auto
 
 ReferenceAlias Function GetControlTempAlias()
 	Return GetAliasByName("ControlTemp") as ReferenceAlias
@@ -32,7 +27,7 @@ EndFunction
 
 ; Morph Complete Function -----------------------------------------------------------------------------------
 function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False, Float aktime = 0.0)
-	ReferenceAlias controlTempAlias = GetAliasByName("ControlTemp") as ReferenceAlias
+	ReferenceAlias controlTempAlias = GetControlTempAlias()
 	Actor puppetActor = None
 	If controlTempAlias
 		puppetActor = controlTempAlias.GetReference() as Actor
@@ -42,9 +37,8 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		return
 	EndIf
 
-	if inprogress == 0
-		inprogress = 1
-		debug.setgodmode(true)
+	if !inprogress
+		inprogress = True
 		
 		; Capture original player name before any appearance or trait cloning occurs
 		String origPlayerName = AK_NG.GetOriginalPlayerName()
@@ -52,15 +46,12 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 			origPlayerName = playerref.GetActorBase().GetName()
 		EndIf
 
-		If akCstopcombatspell
-			akCstopcombatspell.Cast(akimposter)
-		EndIf
+		akimposter.StopCombat()
+		akdonor.StopCombat()
 		
 		game.DisablePlayerControls(true,true,true,true,true, true, True, True)
+		playerref.SetGhost(True)
 		Game.FadeOutGame(true, true, 0.0, 0.3)
-		
-		; Ensure aliases and ghost state are initialized
-		playerref.SetGhost(False)
 		
 		; Dynamically select male or female puppet based on the player's gender
 		if AK_NG.GetActorSex(playerref) == 0
@@ -86,10 +77,6 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		EndIf
 		
 		origionalnpc = akdonor
-		; Aliases preserved on donor
-		If akCstopcombatspell
-			akCstopcombatspell.Cast(playerref)
-		EndIf
 		
 		If mainchar == True
 			AK_NG.CopyAppearance(playerref, akcontroltemp)
@@ -111,11 +98,8 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		EndIf
 
 		origionalnpc.moveto(AKControlCloneMarker)
-		akcontroltemp.SetPlayerTeammate(True, False)
 		akcontroltemp.SetDisplayName(origPlayerName, True)
 		akcontroltemp.BlockActivation(True)
-		AK_NG.SetPuppetActor(akcontroltemp)
-		akcontroltemp.EvaluatePackage()
 
 		Game.FadeOutGame(false, true, 0.0, 0.4)
 		
@@ -124,16 +108,15 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		EndIf
 		
 		game.EnablePlayerControls()
-		debug.setgodmode(false)
+		playerref.SetGhost(False)
 		
 		playerref.addspell(akcontrolrevertspell, False) 
 		
-		inprogress = 0
+		inprogress = False
 		MainChar = False
 		AK_NG.SetControllingNPC(True)
 		AK_NG.BeginImpersonation(akdonor, playerref)
 		RegisterForSingleUpdate(1.0)
-		RegisterForMenu("Dialogue Menu")
 
 		Debug.Notification("Control Swapped")
 	Else
@@ -144,23 +127,24 @@ EndFunction
 ; Revert Function -----------------------------------------------------------------------------------
 function akrevert(actor akimposter, Bool AKDrainmagic = False)
 	if MainChar == False
-		if inprogress == 0
-			inprogress = 1
+		if !inprogress
+			inprogress = True
 			AK_NG.SetControllingNPC(False)
 			AK_NG.EndImpersonation()
 			UnregisterForUpdate()
 			
 			game.DisablePlayerControls(true,true,true,true,true, true, True, True)
+			playerref.SetGhost(True)
 			Game.FadeOutGame(true, true, 0.0, 0.3)
 			
 			akcontrolclonemarkertemp.MoveTo(akimposter)
 			akimposter.moveto(akcontroltemp)
 			
-			debug.setgodmode(true)
 			origionalnpc.moveto(akimposter)
 			
-			If akCstopcombatspell
-				akCstopcombatspell.Cast(akimposter)
+			akimposter.StopCombat()
+			If origionalnpc
+				origionalnpc.StopCombat()
 			EndIf
 			akimposter.RemoveSpell(akcontrolrevertspell)
 			
@@ -169,11 +153,6 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 			AK_NG.RestoreStats(playerref)
 			AK_NG.RestoreInventoryFromPlayer(playerref, origionalnpc, akcontroltemp)
 			AK_NG.RestoreFactions(playerref)
-			If origionalnpc != None
-				origionalnpc.SetAlpha(1.0)
-				origionalnpc.SetGhost(False)
-			EndIf
-			UnregisterForMenu("Dialogue Menu")
 			
 			ReferenceAlias controlTempAlias = GetControlTempAlias()
 			If controlTempAlias
@@ -182,22 +161,18 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 
 			akcontroltemp.BlockActivation(False)
 			akcontroltemp.SetDisplayName("")
-			akcontroltemp.SetPlayerTeammate(False, False)
 			AK_NG.SetPuppetActor(None)
 			akcontroltemp.moveto(akcontrolclonemarker)
 			akcontrolclonemarkertemp.moveto(akcontrolclonemarker)
 
-			playerref.SetGhost(False)
-			akisdead = 0
-			
-			debug.setgodmode(false)
 			playerref.GetActorBase().SetEssential(False)
 			MainChar = True
 
 			Game.FadeOutGame(false, true, 0.0, 0.4)
 
 			game.EnablePlayerControls()
-			inprogress = 0
+			playerref.SetGhost(False)
+			inprogress = False
 			
 			Debug.Notification("Returned to Body")
 		Else
@@ -210,23 +185,5 @@ Event OnUpdate()
 	If MainChar == False
 		AK_NG.UpdateIdleAI()
 		RegisterForSingleUpdate(1.0)
-	EndIf
-EndEvent
-
-Event OnMenuOpen(String MenuName)
-	If MenuName == "Dialogue Menu" && MainChar == False
-		If origionalnpc != None
-			origionalnpc.SetAlpha(0.0)
-		EndIf
-	EndIf
-EndEvent
-
-Event OnMenuClose(String MenuName)
-	If MenuName == "Dialogue Menu" && MainChar == False
-		If origionalnpc != None
-			origionalnpc.SetAlpha(1.0)
-			origionalnpc.SetGhost(False)
-			origionalnpc.MoveTo(AKControlCloneMarker)
-		EndIf
 	EndIf
 EndEvent

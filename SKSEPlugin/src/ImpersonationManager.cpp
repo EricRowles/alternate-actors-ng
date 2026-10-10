@@ -387,11 +387,6 @@ namespace AlternateActors {
                         bool playerSpoken = player->UpdateInDialogue(a_response, a_unused);
                         SKSE::log::info("player->UpdateInDialogue started: {}, nativeRet: {}", playerSpoken, nativeRet);
 
-                        if (!playerSpoken) {
-                            SKSE::log::info("player->UpdateInDialogue was false, attempting PlayMorphedDialogue(kHello) fallback");
-                            IdleAIManager::GetSingleton().PlayMorphedDialogue(RE::DIALOGUE_DATA::Subtype::kHello);
-                        }
-
                         return nativeRet;
                     } else {
                         // Ticks with a_response == nullptr:

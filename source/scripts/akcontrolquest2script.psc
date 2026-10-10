@@ -12,14 +12,9 @@ EndEvent
 
 ; Maintenance Function -----------------------------------------------------------------------------------
 function akmaintenance()
-	If akquest.akmodversion < 1.2
-		if akquest.akmodversion == 1.1 || akquest.akmodversion == 1.0
-			Debug.MessageBox("Revert, then make a clean save to start Alternate Actors!")
-			Return
-		Else
-			akquest.akmodversion = 1.2
-			debug.Notification("Welcome to Alternate Actors " + akquest.akmodversion + "!")	
-		EndIf
+	If akquest.akmodversion < 2.0
+		akquest.akmodversion = 2.0
+		Debug.Notification("Alternate Actors NG initialized.")
 	EndIf
 
 	If !playerref.HasSpell(akquest.akcontrolmorphspell)
