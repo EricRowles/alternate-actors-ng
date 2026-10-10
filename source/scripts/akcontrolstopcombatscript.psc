@@ -6,7 +6,7 @@ AKControlMCMScript Property akquestMCM Auto
 Event OnEffectStart(Actor akTarget, Actor akCaster)
 	If akTarget.GetCombatTarget() == akquest.playerref
 		akTarget.AddToFaction(akquest.CharmFaction)
-	ElseIf akTarget.GetCombatTarget() == akquest.origionalNPC || (akTarget.GetCombatTarget() == akquest.akcontroltemp && akquestMCM.dragonbornfollower == True)
+	ElseIf akTarget.GetCombatTarget() == akquest.origionalNPC || akTarget.GetCombatTarget() == akquest.akcontroltemp
 		akTarget.AddToFaction(akquest.CharmFaction)
 	EndIf
 	

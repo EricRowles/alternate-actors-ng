@@ -45,7 +45,7 @@ Bool Function CopyStats(Actor akFrom, Actor akTo) Global Native
 ; Restores akPlayer's original base stats and skills.
 Bool Function RestoreStats(Actor akPlayer) Global Native
 
-; Enables or disables autonomous idle AI pathing on the controlled character when inactive.
+; Enables or disables autonomous idle AI pathing on the player when inactive.
 Function SetIdleAIEnabled(Bool abEnabled) Global Native
 
 ; Sets the idle timeout in seconds before autonomous AI pathing begins (default 10.0s).
@@ -59,9 +59,6 @@ Function SetControllingNPC(Bool abControlling) Global Native
 
 ; Updates idle timer and initiates autonomous pathing if inactive threshold is met.
 Function UpdateIdleAI() Global Native
-
-; Sets the DXScanCode hotkey for triggering morphed self-dialogue (default 47 = V).
-Function SetDialogueHotkey(Int aiKeyCode) Global Native
 
 ; Opens Skyrim's native Dialogue Menu directly with the controlled actor's morphed identity.
 Bool Function OpenSelfDialogue(Actor akActor = None) Global Native

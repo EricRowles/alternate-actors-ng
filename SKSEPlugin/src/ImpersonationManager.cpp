@@ -3,6 +3,7 @@
 #include "AliasManager.h"
 #include "FaceManager.h"
 #include "Serialization.h"
+#include "IdleAIManager.h"
 
 #include <RE/C/CommandTable.h>
 #include <RE/T/TESCondition.h>
@@ -15,8 +16,9 @@
 #include <RE/V/VirtualMachine.h>
 #include <RE/A/AttachedScript.h>
 #include <RE/O/Object.h>
-#include <RE/O/ObjectTypeInfo.h>
 #include <RE/B/BSAtomic.h>
+#include <RE/A/AIProcess.h>
+#include <RE/H/HighProcessData.h>
 
 namespace AlternateActors {
 
@@ -43,8 +45,9 @@ namespace AlternateActors {
             return true;
         }
 
-        // 2. If checking on player OR puppet, try substituting donor
-        if (a_thisObj && (a_thisObj == player || (puppet && a_thisObj == puppet))) {
+        // 2. If checking on player OR (puppet during self-dialogue), try substituting donor
+        bool isSelfDialogue = IdleAIManager::GetSingleton().IsInSelfDialogue();
+        if (a_thisObj && (a_thisObj == player || (puppet && a_thisObj == puppet && isSelfDialogue))) {
             if constexpr (ID == 426) {
                 auto* targetVoice = static_cast<RE::TESForm*>(a_p1);
                 if (targetVoice && mgr.GetDonorVoiceType() && targetVoice == mgr.GetDonorVoiceType()) {
@@ -87,7 +90,7 @@ namespace AlternateActors {
 
         // 3. Special case for GetIsAliasRef (566): if checking on donor or puppet, retry with player
         if constexpr (ID == 566) {
-            if (a_thisObj && (a_thisObj == donor || (puppet && a_thisObj == puppet)) && player) {
+            if (a_thisObj && (a_thisObj == donor || (puppet && a_thisObj == puppet && isSelfDialogue)) && player) {
                 double playerRes = 0.0;
                 if (orig && orig(player, a_p1, a_p2, playerRes) && playerRes != 0.0) {
                     a_result = playerRes;
@@ -163,17 +166,19 @@ namespace AlternateActors {
         RE::TESObjectREFR* effectiveThis = a_thisObj;
         void* effectiveP1 = a_p1;
 
+        bool isSelfDialogue = IdleAIManager::GetSingleton().IsInSelfDialogue();
+
         // Skip substitution if it would make effectiveThis == effectiveP1
         bool willBeSame = (effectiveThis == player && effectiveP1 == donor) ||
                           (effectiveThis == donor && effectiveP1 == player) ||
-                          (effectiveThis == puppet && effectiveP1 == donor) ||
-                          (effectiveThis == donor && effectiveP1 == puppet);
+                          (effectiveThis == puppet && effectiveP1 == donor && isSelfDialogue) ||
+                          (effectiveThis == donor && effectiveP1 == puppet && isSelfDialogue);
 
         if (!willBeSame) {
-            if (effectiveThis == player || (puppet && effectiveThis == puppet)) {
+            if (effectiveThis == player || (puppet && effectiveThis == puppet && isSelfDialogue)) {
                 effectiveThis = donor;
             }
-            if (effectiveP1 == player || (puppet && effectiveP1 == puppet)) {
+            if (effectiveP1 == player || (puppet && effectiveP1 == puppet && isSelfDialogue)) {
                 effectiveP1 = donor;
             }
         }
@@ -203,8 +208,10 @@ namespace AlternateActors {
             if (mgr.IsActive() && mgr._donorVoiceType) {
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 auto* puppet = mgr.GetPuppet();
-                if ((player && a_this == player->GetActorBase()) ||
-                    (puppet && a_this == puppet->GetActorBase())) {
+                if (player && a_this == player->GetActorBase()) {
+                    return mgr._donorVoiceType;
+                }
+                if (puppet && a_this == puppet->GetActorBase() && IdleAIManager::GetSingleton().IsInSelfDialogue()) {
                     return mgr._donorVoiceType;
                 }
                 if (a_this->voiceType) {
@@ -215,22 +222,289 @@ namespace AlternateActors {
         return _origGetObjectVoiceType(a_this);
     }
 
-    bool ImpersonationManager::Hook_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused) {
+    void ImpersonationManager::OnDialogueResponseStarted(RE::DialogueResponse* a_response) {
+        _playerSpeaking.store(true, std::memory_order_relaxed);
+        _speechStartTime = std::chrono::steady_clock::now();
+        _speechHadSound.store(false, std::memory_order_relaxed);
+        float textLen = 0.0f;
+        if (a_response && !a_response->text.empty()) {
+            textLen = static_cast<float>(a_response->text.length());
+        }
+        _speechMinDuration = std::max(2.0f, textLen * 0.08f);
+    }
+
+    void ImpersonationManager::ResetSpeechTracking() {
+        _playerSpeaking.store(false, std::memory_order_relaxed);
+        _speechHadSound.store(false, std::memory_order_relaxed);
+        if (auto* player = GetPlayer()) {
+            player->SetSpeakingDone(true);
+            player->SetEmotionType(RE::EmotionType::kNeutral);
+            player->SetEmotionValue(0);
+        }
+        if (auto* puppet = GetPuppet()) {
+            puppet->SetSpeakingDone(true);
+            puppet->SetEmotionType(RE::EmotionType::kNeutral);
+            puppet->SetEmotionValue(0);
+        }
+    }
+
+    bool ImpersonationManager::CheckPlayerSpeakingDone() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return true;
+
+        auto now = std::chrono::steady_clock::now();
+        float elapsed = std::chrono::duration<float>(now - _speechStartTime).count();
+
+        // Check if any audio sound handle on player is currently playing
+        bool soundPlaying = false;
+        auto* process = player->GetActorRuntimeData().currentProcess;
+        if (process && process->high) {
+            for (auto& soundHandle : process->high->soundHandles) {
+                if (soundHandle.IsValid() && soundHandle.IsPlaying()) {
+                    soundPlaying = true;
+                    if (!_speechHadSound.load(std::memory_order_relaxed)) {
+                        _speechStartTime = now;
+                        elapsed = 0.0f;
+                    }
+                    _speechHadSound.store(true, std::memory_order_relaxed);
+                    _playerSpeaking.store(true, std::memory_order_relaxed);
+                    break;
+                }
+            }
+        }
+
+        if (soundPlaying) {
+            // Safety timeout of 20s in case sound loops
+            if (elapsed < 20.0f) {
+                return false;
+            }
+        }
+
+        if (_speechHadSound.load(std::memory_order_relaxed)) {
+            // Audio was playing and has now finished!
+            _playerSpeaking.store(false, std::memory_order_relaxed);
+            _speechHadSound.store(false, std::memory_order_relaxed);
+            player->SetSpeakingDone(true);
+            if (auto* puppet = GetPuppet()) {
+                puppet->SetSpeakingDone(true);
+            }
+            SKSE::log::info("Player dialogue/scene speech completed (audio finished after {:.2f}s)", elapsed);
+            auto* ui = RE::UI::GetSingleton();
+            if (ui && !ui->IsMenuOpen("Dialogue Menu"sv)) {
+                IdleAIManager::GetSingleton().SetInSelfDialogue(false);
+            }
+            return true;
+        }
+
+        // If _playerSpeaking was set (e.g. from UpdateInDialogue for unvoiced lines)
+        if (_playerSpeaking.load(std::memory_order_relaxed)) {
+            if (elapsed < _speechMinDuration) {
+                return false;
+            }
+
+            _playerSpeaking.store(false, std::memory_order_relaxed);
+            _speechHadSound.store(false, std::memory_order_relaxed);
+            player->SetSpeakingDone(true);
+            if (auto* puppet = GetPuppet()) {
+                puppet->SetSpeakingDone(true);
+            }
+            SKSE::log::info("Player dialogue speech completed (timer elapsed after {:.2f}s)", elapsed);
+            auto* ui = RE::UI::GetSingleton();
+            if (ui && !ui->IsMenuOpen("Dialogue Menu"sv)) {
+                IdleAIManager::GetSingleton().SetInSelfDialogue(false);
+            }
+            return true;
+        }
+
+        return true;
+    }
+
+    bool ImpersonationManager::Hook_Character_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused) {
         if (a_this) {
             auto& mgr = ImpersonationManager::GetSingleton();
             if (mgr.IsActive()) {
                 auto* puppet = mgr.GetPuppet();
                 auto* player = mgr.GetPlayer();
                 if (puppet && a_this == puppet && player) {
-                    SKSE::log::info("Redirecting dialogue response from puppet {:08X} to player {:08X}: '{}'",
-                        static_cast<std::uint32_t>(puppet->GetFormID()),
-                        static_cast<std::uint32_t>(player->GetFormID()),
-                        a_response ? a_response->text.c_str() : "<null>");
-                    return player->UpdateInDialogue(a_response, a_unused);
+                    if (a_response != nullptr) {
+                        SKSE::log::info("Processing self-dialogue response: text='{}', voice='{}', sound={:08X}, emotion={}, percent={}",
+                            a_response->text.c_str(),
+                            a_response->voice.c_str(),
+                            a_response->voiceSound ? static_cast<std::uint32_t>(a_response->voiceSound->GetFormID()) : 0,
+                            static_cast<std::uint32_t>(a_response->animFaceArchType.get()),
+                            a_response->percent);
+
+                        // Save original response fields
+                        auto origVoice = a_response->voice;
+                        auto* origVoiceSound = a_response->voiceSound;
+                        bool origSoundLip = a_response->soundLip;
+                        bool origUseEmotion = a_response->useEmotion;
+                        auto* origSpeakerIdle = a_response->speakerIdle;
+
+                        // Temporarily strip from response so puppet does NOT play voice, lip, emotion, or idle
+                        a_response->voice = ""sv;
+                        a_response->voiceSound = nullptr;
+                        a_response->soundLip = false;
+                        a_response->useEmotion = false;
+                        a_response->speakerIdle = nullptr;
+
+                        // 1. Advance puppet natively in engine so MenuTopicManager selects topic and runs result scripts
+                        bool nativeRet = _origCharUpdateInDialogue(puppet, a_response, a_unused);
+
+                        // Suppress puppet face, mouth, and audio
+                        if (auto* faceData = puppet->GetFaceGenAnimationData()) {
+                            faceData->Reset(0.0f, true, true, true, false);
+                            faceData->ClearExpressionOverride();
+                        }
+                        puppet->SetEmotionType(RE::EmotionType::kNeutral);
+                        puppet->SetEmotionValue(0);
+
+                        auto* puppetProcess = puppet->GetActorRuntimeData().currentProcess;
+                        if (puppetProcess && puppetProcess->high) {
+                            for (auto& handle : puppetProcess->high->soundHandles) {
+                                if (handle.IsValid()) {
+                                    handle.SetVolume(0.0f);
+                                    handle.Stop();
+                                }
+                            }
+                        }
+
+                        // Restore original fields on response for player
+                        a_response->voice = origVoice;
+                        a_response->voiceSound = origVoiceSound;
+                        a_response->soundLip = origSoundLip;
+                        a_response->useEmotion = origUseEmotion;
+                        a_response->speakerIdle = origSpeakerIdle;
+
+                        // 2. Apply facial emotion and expression directly to player
+                        if (a_response->useEmotion) {
+                            player->SetEmotionType(a_response->animFaceArchType.get());
+                            player->SetEmotionValue(a_response->percent);
+                        }
+
+                        // 3. Play line on player and track speech
+                        mgr.OnDialogueResponseStarted(a_response);
+                        bool playerSpoken = player->UpdateInDialogue(a_response, a_unused);
+                        SKSE::log::info("player->UpdateInDialogue started: {}, nativeRet: {}", playerSpoken, nativeRet);
+
+                        if (!playerSpoken) {
+                            SKSE::log::info("player->UpdateInDialogue was false, attempting PlayMorphedDialogue(kHello) fallback");
+                            IdleAIManager::GetSingleton().PlayMorphedDialogue(RE::DIALOGUE_DATA::Subtype::kHello);
+                        }
+
+                        return nativeRet;
+                    } else {
+                        // Ticks with a_response == nullptr:
+                        // Keep temp NPC face completely still and neutral
+                        if (auto* faceData = puppet->GetFaceGenAnimationData()) {
+                            faceData->ClearExpressionOverride();
+                        }
+
+                        auto* puppetProcess = puppet->GetActorRuntimeData().currentProcess;
+                        if (puppetProcess && puppetProcess->high) {
+                            for (auto& handle : puppetProcess->high->soundHandles) {
+                                if (handle.IsValid()) {
+                                    handle.SetVolume(0.0f);
+                                    handle.Stop();
+                                }
+                            }
+                        }
+
+                        // Let temp NPC head-track player as listener
+                        _origCharUpdateInDialogue(puppet, nullptr, a_unused);
+
+                        // Always tick player so lip-sync phonemes, mouth movement, and speech advance
+                        player->UpdateInDialogue(nullptr, a_unused);
+                        return true;
+                    }
                 }
             }
         }
-        return _origUpdateInDialogue(a_this, a_response, a_unused);
+        return _origCharUpdateInDialogue(a_this, a_response, a_unused);
+    }
+
+    bool ImpersonationManager::Hook_Player_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused) {
+        if (a_this) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive()) {
+                if (a_response != nullptr) {
+                    SKSE::log::info("Player {:08X} speaking dialogue line: '{}'",
+                        static_cast<std::uint32_t>(a_this->GetFormID()),
+                        a_response->text.c_str());
+                    mgr.OnDialogueResponseStarted(a_response);
+                }
+            }
+        }
+        return _origPlayerUpdateInDialogue(a_this, a_response, a_unused);
+    }
+
+    bool ImpersonationManager::Hook_Character_QSpeakingDone(const RE::Actor* a_this) {
+        if (a_this) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive()) {
+                auto* puppet = mgr.GetPuppet();
+                if (puppet && a_this == puppet) {
+                    if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
+                        // In self-dialogue, check if the player has finished speaking
+                        return mgr.CheckPlayerSpeakingDone();
+                    }
+                    bool charDone = _origCharQSpeakingDone(puppet);
+                    bool playerDone = mgr.CheckPlayerSpeakingDone();
+                    return charDone && playerDone;
+                }
+            }
+        }
+        return _origCharQSpeakingDone(a_this);
+    }
+
+    bool ImpersonationManager::Hook_Player_QSpeakingDone(const RE::Actor* a_this) {
+        if (a_this) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive()) {
+                return mgr.CheckPlayerSpeakingDone();
+            }
+        }
+        return _origPlayerQSpeakingDone(a_this);
+    }
+
+    void ImpersonationManager::Hook_Character_SetSpeakingDone(RE::Actor* a_this, bool a_set) {
+        if (a_this) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive()) {
+                auto* puppet = mgr.GetPuppet();
+                if (puppet && a_this == puppet) {
+                    if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
+                        // In self-dialogue, the player (player) is the speaker.
+                        // Do not let the temp NPC's native state override the player's speech tracking!
+                        _origCharSetSpeakingDone(a_this, a_set);
+                        return;
+                    }
+                }
+            }
+        }
+        _origCharSetSpeakingDone(a_this, a_set);
+    }
+
+    void ImpersonationManager::Hook_Player_SetSpeakingDone(RE::Actor* a_this, bool a_set) {
+        if (a_set) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            mgr._playerSpeaking.store(false, std::memory_order_relaxed);
+            mgr._speechHadSound.store(false, std::memory_order_relaxed);
+        }
+        _origPlayerSetSpeakingDone(a_this, a_set);
+    }
+
+    bool ImpersonationManager::Hook_SetDialogueWithPlayer(RE::Actor* a_this, bool a_flag, bool a_forceGreet, RE::TESTopicInfo* a_topic) {
+        if (a_this) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive()) {
+                auto* puppet = mgr.GetPuppet();
+                if (puppet && a_this == puppet) {
+                    IdleAIManager::GetSingleton().SetInSelfDialogue(a_flag);
+                }
+            }
+        }
+        return _origSetDialogueWithPlayer(a_this, a_flag, a_forceGreet, a_topic);
     }
 
     void ImpersonationManager::InstallHooks() {
@@ -242,11 +516,24 @@ namespace AlternateActors {
         SKSE::log::info("Hooked TESNPC::GetObjectVoiceType at VTABLE_TESNPC[0] idx 0x49 (orig: {:016X})",
             _origGetObjectVoiceType.address());
 
-        // Hook Character::UpdateInDialogue on primary vtable (index 0x4C)
+        // Hook Character::SetDialogueWithPlayer on primary vtable (index 0x41)
         REL::Relocation<std::uintptr_t> charVtbl{ RE::VTABLE_Character[0] };
-        _origUpdateInDialogue = charVtbl.write_vfunc(0x4C, &Hook_UpdateInDialogue);
-        SKSE::log::info("Hooked Character::UpdateInDialogue at VTABLE_Character[0] idx 0x4C (orig: {:016X})",
-            _origUpdateInDialogue.address());
+        _origSetDialogueWithPlayer = charVtbl.write_vfunc(0x41, &Hook_SetDialogueWithPlayer);
+        SKSE::log::info("Hooked Character::SetDialogueWithPlayer at VTABLE_Character[0] idx 0x41 (orig: {:016X})",
+            _origSetDialogueWithPlayer.address());
+
+        // Hook Character vtable (0x4C UpdateInDialogue, 0x107 QSpeakingDone, 0x108 SetSpeakingDone)
+        _origCharUpdateInDialogue = charVtbl.write_vfunc(0x4C, &Hook_Character_UpdateInDialogue);
+        _origCharQSpeakingDone = charVtbl.write_vfunc(0x107, &Hook_Character_QSpeakingDone);
+        _origCharSetSpeakingDone = charVtbl.write_vfunc(0x108, &Hook_Character_SetSpeakingDone);
+        SKSE::log::info("Hooked Character dialogue vfuncs (0x4C, 0x107, 0x108)");
+
+        // Hook PlayerCharacter vtable (0x4C UpdateInDialogue, 0x107 QSpeakingDone, 0x108 SetSpeakingDone)
+        REL::Relocation<std::uintptr_t> playerVtbl{ RE::VTABLE_PlayerCharacter[0] };
+        _origPlayerUpdateInDialogue = playerVtbl.write_vfunc(0x4C, &Hook_Player_UpdateInDialogue);
+        _origPlayerQSpeakingDone = playerVtbl.write_vfunc(0x107, &Hook_Player_QSpeakingDone);
+        _origPlayerSetSpeakingDone = playerVtbl.write_vfunc(0x108, &Hook_Player_SetSpeakingDone);
+        SKSE::log::info("Hooked PlayerCharacter dialogue vfuncs (0x4C, 0x107, 0x108)");
 
         auto* commands = RE::SCRIPT_FUNCTION::GetFirstScriptCommand();
         if (!commands) {
@@ -433,6 +720,12 @@ namespace AlternateActors {
                 if (followerFaction) {
                     oldPuppet->AddToFaction(followerFaction, -1);
                 }
+                if (auto* base = skyrim_cast<RE::TESNPC*>(oldPuppet->GetActorBase())) {
+                    auto* followPkg = RE::TESForm::LookupByID<RE::TESPackage>(0x0004B037); // DefaultFollowPlayer
+                    if (followPkg && !base->aiPackages.packages.empty() && base->aiPackages.packages.front() == followPkg) {
+                        base->aiPackages.packages.pop_front();
+                    }
+                }
                 oldPuppet->EvaluatePackage(false, false);
                 SKSE::log::info("Disengaged follower status from puppet {:08X}",
                     static_cast<std::uint32_t>(oldPuppet->GetFormID()));
@@ -446,13 +739,30 @@ namespace AlternateActors {
         // 1. Set PlayerTeammate flag so puppet follows player, draws weapons, and assists in combat
         a_puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
 
-        // 2. Add to CurrentFollowerFaction (0x0005C84E) with rank 0
+        // 2. Add DefaultFollowPlayer package (0x0004B037) so puppet paths and follows player
+        if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
+            auto* followPkg = RE::TESForm::LookupByID<RE::TESPackage>(0x0004B037); // DefaultFollowPlayer
+            if (followPkg) {
+                bool hasPkg = false;
+                for (auto* pkg : base->aiPackages.packages) {
+                    if (pkg == followPkg) {
+                        hasPkg = true;
+                        break;
+                    }
+                }
+                if (!hasPkg) {
+                    base->aiPackages.packages.push_front(followPkg);
+                }
+            }
+        }
+
+        // 3. Add to CurrentFollowerFaction (0x0005C84E) with rank 0
         auto* followerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84E);
         if (followerFaction) {
             a_puppet->AddToFaction(followerFaction, 0);
         }
 
-        // 3. Ensure in PlayerFaction (0x00000DB1) with rank 0
+        // 4. Ensure in PlayerFaction (0x00000DB1) with rank 0
         auto* playerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x00000DB1);
         if (playerFaction) {
             a_puppet->AddToFaction(playerFaction, 0);
@@ -476,9 +786,9 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::Tick() {
-        // Periodic alias swapping during Tick removed:
-        // Aliases are swapped on Begin() and restored on End().
-        // Continual polling here is hazardous during cell transitions and threading.
+        if (_playerSpeaking.load(std::memory_order_relaxed)) {
+            CheckPlayerSpeakingDone();
+        }
     }
 
     // --- Layer 3: AI Packages Retargeting ---

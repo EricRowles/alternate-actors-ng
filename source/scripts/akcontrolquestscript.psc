@@ -5,8 +5,6 @@ AKControlQuest2Script property akquest2 Auto
 AKControlMCMScript property akquestmcm Auto
 
 float property akmodversion Auto
-float property akstarttime Auto
-float property akdurationtime Auto
 
 ObjectReference property AKControlCloneMarker auto		; where to hide the nonused npcs
 ObjectReference property AKControlCloneMarkerTemp auto	; temp use to mark where an NPC is
@@ -28,10 +26,18 @@ Int property akisdead auto					; is the main character dead? 0 = no, 1 = recentl
 
 Faction Property CharmFaction Auto
 
+ReferenceAlias Function GetControlTempAlias()
+	Return GetAliasByName("ControlTemp") as ReferenceAlias
+EndFunction
+
 ; Morph Complete Function -----------------------------------------------------------------------------------
 function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False, Float aktime = 0.0)
-	; If target is any puppet / storage actor, revert to original form instead of morphing into puppet
-	If akdonor == akcontroltemp || akdonor == akcontroltempmale || akdonor == akcontroltempFemale || akdonor == akquestfrag.alias_ControlTemp.GetReference() as Actor
+	ReferenceAlias controlTempAlias = GetAliasByName("ControlTemp") as ReferenceAlias
+	Actor puppetActor = None
+	If controlTempAlias
+		puppetActor = controlTempAlias.GetReference() as Actor
+	EndIf
+	If akdonor == akcontroltemp || akdonor == akcontroltempmale || akdonor == akcontroltempFemale || (puppetActor && akdonor == puppetActor)
 		akrevert(akimposter)
 		return
 	EndIf
@@ -46,15 +52,14 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 			origPlayerName = playerref.GetActorBase().GetName()
 		EndIf
 
-		akCstopcombatspell.Cast(akimposter)
-		
-		If akquestmcm.Debugmode == False
-			game.DisablePlayerControls(true,true,true,true,true, true, True, True)
-			akquest2.akloadscreenon()
+		If akCstopcombatspell
+			akCstopcombatspell.Cast(akimposter)
 		EndIf
 		
+		game.DisablePlayerControls(true,true,true,true,true, true, True, True)
+		Game.FadeOutGame(true, true, 0.0, 0.3)
+		
 		; Ensure aliases and ghost state are initialized
-		akquestfrag.alias_Ghost.Clear()
 		playerref.SetGhost(False)
 		
 		; Dynamically select male or female puppet based on the player's gender
@@ -63,7 +68,9 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		Else
 			akcontroltemp = akcontroltempFemale
 		EndIf
-		akquestfrag.alias_ControlTemp.ForceRefTo(akcontroltemp)
+		If controlTempAlias
+			controlTempAlias.ForceRefTo(akcontroltemp)
+		EndIf
 		AK_NG.SetPuppetActor(akcontroltemp)
 
 		; Transfer traits from PC back to orignpc before getting new traits if we were already controlling an NPC
@@ -80,7 +87,9 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		
 		origionalnpc = akdonor
 		; Aliases preserved on donor
-		akCstopcombatspell.Cast(playerref)
+		If akCstopcombatspell
+			akCstopcombatspell.Cast(playerref)
+		EndIf
 		
 		If mainchar == True
 			AK_NG.CopyAppearance(playerref, akcontroltemp)
@@ -102,20 +111,13 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		EndIf
 
 		origionalnpc.moveto(AKControlCloneMarker)
-		If akquestmcm.dragonbornfollower == False
-			akcontroltemp.moveto(AKControlCloneMarker)
-			AK_NG.SetPuppetActor(None)
-		Else
-			akcontroltemp.SetPlayerTeammate(True, False)
-			akcontroltemp.SetDisplayName(origPlayerName, True)
-			akcontroltemp.BlockActivation(True)
-			AK_NG.SetPuppetActor(akcontroltemp)
-			akcontroltemp.EvaluatePackage()
-		EndIf
+		akcontroltemp.SetPlayerTeammate(True, False)
+		akcontroltemp.SetDisplayName(origPlayerName, True)
+		akcontroltemp.BlockActivation(True)
+		AK_NG.SetPuppetActor(akcontroltemp)
+		akcontroltemp.EvaluatePackage()
 
-		If akquestmcm.Debugmode == False
-			akquest2.akloadscreenoff()
-		EndIf
+		Game.FadeOutGame(false, true, 0.0, 0.4)
 		
 		if akquestmcm.revertondeath == True
 			akimposter.GetActorBase().SetEssential(True)
@@ -124,16 +126,7 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		game.EnablePlayerControls()
 		debug.setgodmode(false)
 		
-		AKTraitTransferInvis(akcontroltemp, origionalnpc)
 		playerref.addspell(akcontrolrevertspell, False) 
-		
-		if duration == True
-			debug.Notification("You will be able to maintain control for " + (aktime as int) + " seconds.")
-			akdurationtime = aktime
-			akstarttime = utility.GetCurrentRealTime()
-		Else
-			akdurationtime = 0.0
-		EndIf
 		
 		inprogress = 0
 		MainChar = False
@@ -156,23 +149,19 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 			AK_NG.SetControllingNPC(False)
 			AK_NG.EndImpersonation()
 			UnregisterForUpdate()
-			akdurationtime = 0.0
 			
-			If akquestmcm.Debugmode == False
-				game.DisablePlayerControls(true,true,true,true,true, true, True, True)
-				akquest2.akloadscreenon()
-			EndIf
+			game.DisablePlayerControls(true,true,true,true,true, true, True, True)
+			Game.FadeOutGame(true, true, 0.0, 0.3)
 			
 			akcontrolclonemarkertemp.MoveTo(akimposter)
-			
-			If akquestmcm.dragonbornfollower == True
-				akimposter.moveto(akcontroltemp)
-			EndIf
+			akimposter.moveto(akcontroltemp)
 			
 			debug.setgodmode(true)
 			origionalnpc.moveto(akimposter)
 			
-			akCstopcombatspell.Cast(akimposter)
+			If akCstopcombatspell
+				akCstopcombatspell.Cast(akimposter)
+			EndIf
 			akimposter.RemoveSpell(akcontrolrevertspell)
 			
 			AK_NG.CopyStats(playerref, origionalnpc)
@@ -186,6 +175,11 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 			EndIf
 			UnregisterForMenu("Dialogue Menu")
 			
+			ReferenceAlias controlTempAlias = GetControlTempAlias()
+			If controlTempAlias
+				controlTempAlias.Clear()
+			EndIf
+
 			akcontroltemp.BlockActivation(False)
 			akcontroltemp.SetDisplayName("")
 			akcontroltemp.SetPlayerTeammate(False, False)
@@ -193,7 +187,6 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 			akcontroltemp.moveto(akcontrolclonemarker)
 			akcontrolclonemarkertemp.moveto(akcontrolclonemarker)
 
-			AKQuestFrag.Alias_Ghost.Clear()
 			playerref.SetGhost(False)
 			akisdead = 0
 			
@@ -201,9 +194,7 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 			playerref.GetActorBase().SetEssential(False)
 			MainChar = True
 
-			If akquestmcm.Debugmode == False
-				akquest2.akloadscreenoff()
-			EndIf
+			Game.FadeOutGame(false, true, 0.0, 0.4)
 
 			game.EnablePlayerControls()
 			inprogress = 0
@@ -215,21 +206,8 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 	EndIf
 EndFunction
 
-; Compatibility helper
-Function AKTraitTransferInvis(Actor akdonor, Actor akimposter)
-	; Kept for backwards compatibility
-EndFunction
-
 Event OnUpdate()
 	If MainChar == False
-		If akdurationtime > 0.0
-			Float elapsed = Utility.GetCurrentRealTime() - akstarttime
-			If elapsed >= akdurationtime
-				akdurationtime = 0.0
-				akrevert(playerref)
-				Return
-			EndIf
-		EndIf
 		AK_NG.UpdateIdleAI()
 		RegisterForSingleUpdate(1.0)
 	EndIf

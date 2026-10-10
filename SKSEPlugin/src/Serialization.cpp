@@ -150,17 +150,17 @@ namespace AlternateActors::Serialization {
             }
         }
 
-        // 6. Save Idle AI, Hotkey & Active Donor Actor
+        // 6. Save Idle AI & Active Donor Actor
         if (a_serde->OpenRecord(kIdleAIDataRecord, kSerializationVersion)) {
             bool enabled = IdleAIManager::GetSingleton().IsIdleAIEnabled();
             float timeout = IdleAIManager::GetSingleton().GetIdleTimeout();
-            std::int32_t hotkey = IdleAIManager::GetSingleton().GetDialogueHotkey();
+            std::int32_t unusedHotkey{ 0 };
             RE::FormID donorID = IdleAIManager::GetSingleton().GetActiveDonorActor() ?
                 IdleAIManager::GetSingleton().GetActiveDonorActor()->GetFormID() : 0;
 
             a_serde->WriteRecordData(&enabled, sizeof(enabled));
             a_serde->WriteRecordData(&timeout, sizeof(timeout));
-            a_serde->WriteRecordData(&hotkey, sizeof(hotkey));
+            a_serde->WriteRecordData(&unusedHotkey, sizeof(unusedHotkey));
             a_serde->WriteRecordData(&donorID, sizeof(donorID));
         }
 
@@ -365,13 +365,13 @@ namespace AlternateActors::Serialization {
                 case kIdleAIDataRecord: {
                     bool enabled = false;
                     float timeout = 10.0f;
-                    std::int32_t hotkey = 47;
+                    std::int32_t unusedHotkey{ 0 };
                     RE::FormID donorID = 0;
 
                     a_serde->ReadRecordData(&enabled, sizeof(enabled));
                     a_serde->ReadRecordData(&timeout, sizeof(timeout));
-                    a_serde->ReadRecordData(&hotkey, sizeof(hotkey));
-                    if (length >= (sizeof(enabled) + sizeof(timeout) + sizeof(hotkey) + sizeof(donorID))) {
+                    a_serde->ReadRecordData(&unusedHotkey, sizeof(unusedHotkey));
+                    if (length >= (sizeof(enabled) + sizeof(timeout) + sizeof(unusedHotkey) + sizeof(donorID))) {
                         a_serde->ReadRecordData(&donorID, sizeof(donorID));
                         if (a_serde->ResolveFormID(donorID, donorID)) {
                             auto* donor = RE::TESForm::LookupByID<RE::Actor>(donorID);
@@ -381,7 +381,6 @@ namespace AlternateActors::Serialization {
 
                     IdleAIManager::GetSingleton().SetIdleAIEnabled(enabled);
                     IdleAIManager::GetSingleton().SetIdleTimeout(timeout);
-                    IdleAIManager::GetSingleton().SetDialogueHotkey(hotkey);
                     SKSE::log::info("Loaded Idle AI state from co-save.");
                     break;
                 }

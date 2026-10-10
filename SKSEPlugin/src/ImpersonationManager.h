@@ -79,6 +79,10 @@ namespace AlternateActors {
 
         static RE::BGSVoiceType* GetNPCVoiceType(const RE::TESNPC* a_npc);
 
+        void ResetSpeechTracking();
+        bool CheckPlayerSpeakingDone();
+        void OnDialogueResponseStarted(RE::DialogueResponse* a_response);
+
     private:
         ImpersonationManager() = default;
         ~ImpersonationManager() = default;
@@ -89,10 +93,30 @@ namespace AlternateActors {
         static RE::BGSVoiceType* Hook_GetObjectVoiceType(const RE::TESNPC* a_this);
         inline static REL::Relocation<decltype(Hook_GetObjectVoiceType)> _origGetObjectVoiceType;
 
-        static bool Hook_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused);
+        static bool Hook_Character_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused);
         using UpdateInDialogue_t = bool(RE::Actor*, RE::DialogueResponse*, bool);
-        inline static REL::Relocation<UpdateInDialogue_t> _origUpdateInDialogue;
+        inline static REL::Relocation<UpdateInDialogue_t> _origCharUpdateInDialogue;
 
+        static bool Hook_Player_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused);
+        inline static REL::Relocation<UpdateInDialogue_t> _origPlayerUpdateInDialogue;
+
+        static bool Hook_Character_QSpeakingDone(const RE::Actor* a_this);
+        using QSpeakingDone_t = bool(const RE::Actor*);
+        inline static REL::Relocation<QSpeakingDone_t> _origCharQSpeakingDone;
+
+        static bool Hook_Player_QSpeakingDone(const RE::Actor* a_this);
+        inline static REL::Relocation<QSpeakingDone_t> _origPlayerQSpeakingDone;
+
+        static void Hook_Character_SetSpeakingDone(RE::Actor* a_this, bool a_set);
+        using SetSpeakingDone_t = void(RE::Actor*, bool);
+        inline static REL::Relocation<SetSpeakingDone_t> _origCharSetSpeakingDone;
+
+        static void Hook_Player_SetSpeakingDone(RE::Actor* a_this, bool a_set);
+        inline static REL::Relocation<SetSpeakingDone_t> _origPlayerSetSpeakingDone;
+
+        static bool Hook_SetDialogueWithPlayer(RE::Actor* a_this, bool a_flag, bool a_forceGreet, RE::TESTopicInfo* a_topic);
+        using SetDialogueWithPlayer_t = bool(RE::Actor*, bool, bool, RE::TESTopicInfo*);
+        inline static REL::Relocation<SetDialogueWithPlayer_t> _origSetDialogueWithPlayer;
 
         void RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player);
         void RestorePackages();
@@ -124,6 +148,11 @@ namespace AlternateActors {
         std::string _donorName;
         std::string _origPlayerName;
         RE::ActorHandle _puppetHandle;
+
+        std::atomic<bool> _playerSpeaking{ false };
+        std::atomic<bool> _speechHadSound{ false };
+        std::chrono::steady_clock::time_point _speechStartTime{ std::chrono::steady_clock::now() };
+        float _speechMinDuration{ 2.0f };
 
         ImpersonationOptions _options;
         std::vector<PackageRetargetRecord> _retargetedPackages;

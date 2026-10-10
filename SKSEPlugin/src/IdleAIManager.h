@@ -39,9 +39,6 @@ namespace AlternateActors {
         void SetIdleTimeout(float a_seconds) { _idleTimeoutSeconds = a_seconds; }
         float GetIdleTimeout() const { return _idleTimeoutSeconds; }
 
-        void SetDialogueHotkey(std::int32_t a_key) { _dialogueHotkey = a_key; }
-        std::int32_t GetDialogueHotkey() const { return _dialogueHotkey; }
-
         void SetActiveDonorActor(RE::Actor* a_donor) {
             _activeDonorActor = a_donor ? a_donor->GetHandle() : RE::ActorHandle();
             _dialogueCache.Clear();
@@ -58,6 +55,8 @@ namespace AlternateActors {
         void ShowActor(RE::Actor* a_actor);
 
         bool IsAIActive() const { return _aiActive; }
+        bool IsInSelfDialogue() const;
+        void SetInSelfDialogue(bool a_inSelf) { _inSelfDialogue = a_inSelf; }
 
         void Clear() {
             StopIdleAI();
@@ -106,7 +105,6 @@ namespace AlternateActors {
         float _idleTimeoutSeconds{ 10.0f };
         float _idleCommentElapsed{ 0.0f };
         float _nextIdleCommentInterval{ 60.0f };
-        std::int32_t _dialogueHotkey{ -1 }; // Disabled by default; dummy activation triggers self-dialogue
         RE::ActorHandle _activeDonorActor;
         RE::ActorHandle _activeProxySpeaker;
         MorphedDialogueCache _dialogueCache;

@@ -7,13 +7,8 @@ Actor Property Playerref Auto
 
 ; MCM Property Variables
 bool Property RevertOnDeath = True Auto 		; Revert to player on death
-bool Property dragonbornfollower = True Auto Hidden 	; Does the dragonborn puppet appear after transfer
-bool Property CanBeGhost = False Auto Hidden	; Deprecated ghost feature (retained for property compatibility)
-bool Property lorefriendly = False Auto Hidden	; Hide cheat spells
-bool Property DebugMode = False Auto Hidden		; Hide loading screen
-bool Property IdleAIEnabled = False Auto
-Float Property IdleAITimeout = 10.0 Auto
-int Property DialogueHotkey = 47 Auto ; Key V
+bool Property IdleAIEnabled = True Auto
+Float Property IdleAITimeout = 5.0 Auto
 bool Property ImpersonateConditions = True Auto
 bool Property ImpersonateAliases = True Auto
 bool Property ImpersonatePackages = True Auto
@@ -21,13 +16,10 @@ bool Property ImpersonateScripts = False Auto
 
 ; MCM Spell Properties
 Spell Property AKControlMorphSpell Auto
-Spell Property AKControlRemoteSpell Auto Hidden ; Deprecated
-Spell Property AKControlSaveRemoteSpell Auto Hidden ; Deprecated
 
 ; Option IDs
 int _oid_idleAI
 int _oid_idleTimeout
-int _oid_dialogueHotkey
 int _oid_revertOnDeath
 int _oid_revert
 int _oid_impersonateConditions
@@ -41,18 +33,10 @@ event OnConfigInit()
 
 	AK_NG.SetIdleAIEnabled(IdleAIEnabled)
 	AK_NG.SetIdleAITimeout(IdleAITimeout)
-	AK_NG.SetDialogueHotkey(DialogueHotkey)
 	AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
 endEvent
 
 event OnPageReset(string page)
-	if (page == "")
-		LoadCustomContent("AKAlternateActorsTitle.dds", 3, 105)
-		return
-	else
-		UnloadCustomContent()
-	endIf
-
 	SetCursorPosition(0)
 	if (page == "Options")
 		SetCursorFillMode(LEFT_TO_RIGHT)
@@ -140,7 +124,7 @@ endEvent
 
 event OnOptionHighlight(int option)
 	if option == _oid_idleAI
-		SetInfoText("Enables autonomous AI pathing on your controlled character after a few seconds of inactivity.")
+		SetInfoText("Enables autonomous AI pathing on your player after a few seconds of inactivity.")
 	elseif option == _oid_idleTimeout
 		SetInfoText("Seconds of player inactivity before autonomous AI pathing begins.")
 	elseif option == _oid_revertOnDeath

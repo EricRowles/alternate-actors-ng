@@ -79,10 +79,6 @@ namespace AlternateActors::Papyrus {
         IdleAIManager::GetSingleton().Update();
     }
 
-    void SetDialogueHotkey(RE::StaticFunctionTag*, std::int32_t a_key) {
-        IdleAIManager::GetSingleton().SetDialogueHotkey(a_key);
-    }
-
     bool OpenSelfDialogue(RE::StaticFunctionTag*, RE::Actor* a_speaker) {
         return IdleAIManager::GetSingleton().OpenSelfDialogue(a_speaker);
     }
@@ -227,7 +223,6 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("IsIdleAIActive", className, IsIdleAIActive);
         a_vm->RegisterFunction("SetControllingNPC", className, SetControllingNPC);
         a_vm->RegisterFunction("UpdateIdleAI", className, UpdateIdleAI);
-        a_vm->RegisterFunction("SetDialogueHotkey", className, SetDialogueHotkey);
         a_vm->RegisterFunction("OpenSelfDialogue", className, OpenSelfDialogue);
         a_vm->RegisterFunction("TriggerVoiceLine", className, TriggerVoiceLine);
         a_vm->RegisterFunction("GetActorSex", className, GetActorSex);

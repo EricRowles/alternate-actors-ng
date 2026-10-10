@@ -3,10 +3,15 @@
 #include "ImpersonationManager.h"
 #include <cmath>
 #include <cstdlib>
+#include <new>
+#include <excpt.h>
+#pragma warning(push)
+#pragma warning(disable: 4291)
 #include <RE/T/TESTopic.h>
 #include <RE/T/TESTopicInfo.h>
 #include <RE/D/DialogueItem.h>
 #include <RE/T/TESDataHandler.h>
+#include <RE/M/MenuTopicManager.h>
 
 namespace AlternateActors {
 
@@ -43,10 +48,11 @@ namespace AlternateActors {
         }
 
         if (_isControllingNPC && ImpersonationManager::GetSingleton().IsActive()) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+
             _idleCommentElapsed += 1.0f;
             if (_idleCommentElapsed >= _nextIdleCommentInterval) {
                 auto* ui = RE::UI::GetSingleton();
-                auto* player = RE::PlayerCharacter::GetSingleton();
                 if (ui && !ui->GameIsPaused() && !ui->IsMenuOpen("Dialogue Menu"sv) &&
                     !ui->IsMenuOpen("Console"sv) && !ui->IsMenuOpen("Loading Menu"sv) &&
                     !ui->IsModalMenuOpen() && player && !player->IsInCombat() &&
@@ -75,11 +81,6 @@ namespace AlternateActors {
         for (auto* event = *a_event; event; event = event->next) {
             if (event->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
                 const auto* button = static_cast<const RE::ButtonEvent*>(event);
-                if (button->IsDown()) {
-                    if (_dialogueHotkey > 0 && button->GetIDCode() == static_cast<std::uint32_t>(_dialogueHotkey)) {
-                        OpenSelfDialogue(nullptr);
-                    }
-                }
                 if (button->IsPressed() || button->IsDown() || button->IsHeld()) {
                     hasUserAction = true;
                     break;
@@ -121,15 +122,10 @@ namespace AlternateActors {
                 }
                 if (_inSelfDialogue) {
                     _inSelfDialogue = false;
+                    ImpersonationManager::GetSingleton().ResetSpeechTracking();
                     PlayMorphedDialogue(RE::DIALOGUE_DATA::Subtype::kGoodBye);
-                }
-            }
-        } else if (a_event->menuName == "RaceSex Menu"sv && a_event->opening) {
-            if (_isControllingNPC || ImpersonationManager::GetSingleton().IsActive()) {
-                SKSE::log::warn("RaceSex Menu opened while morphed into NPC! Forcibly closing immediately to protect custom head meshes.");
-                auto* msgQueue = RE::UIMessageQueue::GetSingleton();
-                if (msgQueue) {
-                    msgQueue->AddMessage("RaceSex Menu"sv, RE::UI_MESSAGE_TYPE::kHide, nullptr);
+                } else {
+                    ImpersonationManager::GetSingleton().ResetSpeechTracking();
                 }
             }
         }
@@ -310,10 +306,12 @@ namespace AlternateActors {
         player->AllowPCDialogue(true);
         player->AllowBleedoutDialogue(true);
 
+        // Mark self-dialogue active BEFORE initiating dialogue so condition and voice hooks match
+        _inSelfDialogue = true;
+
         // Open native dialogue menu directly with the speaker (the puppet)
         bool opened = a_speaker->SetDialogueWithPlayer(true, false, nullptr);
         if (opened) {
-            _inSelfDialogue = true;
             SKSE::log::info("Successfully opened dialogue with actor {:08X} (isPuppet: {})",
                 static_cast<std::uint32_t>(a_speaker->GetFormID()), (a_speaker == puppet));
             return true;
@@ -323,6 +321,21 @@ namespace AlternateActors {
                 static_cast<std::uint32_t>(a_speaker->GetFormID()));
             return PlayMorphedDialogue(RE::DIALOGUE_DATA::Subtype::kHello);
         }
+    }
+
+    bool IdleAIManager::IsInSelfDialogue() const {
+        if (_inSelfDialogue) return true;
+        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        if (topicMgr) {
+            auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+            if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
+                auto* ui = RE::UI::GetSingleton();
+                if (ui && ui->IsMenuOpen("Dialogue Menu"sv)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     bool IdleAIManager::TriggerVoiceLine(RE::Actor* /*a_speaker*/) {
@@ -417,6 +430,16 @@ namespace AlternateActors {
             _dialogueCache.donorIdleTopics.size(), _dialogueCache.genericIdleTopics.size());
     }
 
+    static bool SafeGetDialogueData(RE::TESTopicInfo* a_info, RE::Actor* a_speaker, void* a_outItemBuf) {
+        if (!a_info || !a_speaker) return false;
+        __try {
+            new (a_outItemBuf) RE::DialogueItem(a_info->GetDialogueData(a_speaker));
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     bool IdleAIManager::PlayMorphedDialogue(RE::DIALOGUE_DATA::Subtype a_subtype) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return false;
@@ -435,6 +458,11 @@ namespace AlternateActors {
         auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
         RE::Actor* listener = puppet ? puppet : player;
 
+        auto* donorVoice = ImpersonationManager::GetSingleton().GetDonorVoiceType();
+        if (!donorVoice && donor->GetActorBase()) {
+            donorVoice = ImpersonationManager::GetNPCVoiceType(skyrim_cast<RE::TESNPC*>(donor->GetActorBase()));
+        }
+
         const auto& donorTopics = (a_subtype == RE::DIALOGUE_DATA::Subtype::kHello) ? _dialogueCache.donorHelloTopics :
                                   (a_subtype == RE::DIALOGUE_DATA::Subtype::kGoodBye) ? _dialogueCache.donorGoodbyeTopics :
                                   _dialogueCache.donorIdleTopics;
@@ -446,7 +474,6 @@ namespace AlternateActors {
         struct Candidate {
             RE::TESTopicInfo* info{ nullptr };
             RE::DialogueResponse* resp{ nullptr };
-            bool onPlayer{ true };
         };
         std::vector<Candidate> candidates;
 
@@ -463,32 +490,52 @@ namespace AlternateActors {
                         continue;
                     }
 
+                    // Voice-type compatibility check:
+                    // If an info specifically requires a voice type that does NOT match donor, skip it immediately.
+                    if (donorVoice && info->objConditions.head) {
+                        bool hasVoiceCondition = false;
+                        bool voiceMatches = false;
+                        for (auto* cond = info->objConditions.head; cond; cond = cond->next) {
+                            if (cond->data.functionData.function.get() == RE::FUNCTION_DATA::FunctionID::kGetIsVoiceType) {
+                                hasVoiceCondition = true;
+                                if (cond->data.functionData.params[0] == donorVoice) {
+                                    voiceMatches = true;
+                                }
+                            }
+                        }
+                        if (hasVoiceCondition && !voiceMatches) {
+                            continue;
+                        }
+                    }
+
                     // Condition check
                     bool condPass = false;
                     if (!info->objConditions.head) {
                         condPass = a_isDonorGroup;
-                    } else {
-                        if (info->objConditions.IsTrue(player, listener)) {
-                            condPass = true;
-                        } else if (donor && info->objConditions.IsTrue(donor, player)) {
-                            condPass = true;
-                        }
+                    } else if (info->objConditions.IsTrue(player, listener) || (donor && info->objConditions.IsTrue(donor, listener))) {
+                        condPass = true;
                     }
 
                     if (!condPass) continue;
 
-                    auto item = info->GetDialogueData(player);
-                    bool canUsePlayer = true;
-                    if (item.responses.empty() && donor) {
-                        item = info->GetDialogueData(donor);
-                        canUsePlayer = false;
+                    alignas(RE::DialogueItem) std::byte itemBuf[sizeof(RE::DialogueItem)];
+                    auto* item = reinterpret_cast<RE::DialogueItem*>(itemBuf);
+
+                    bool gotItem = false;
+                    if (donor && SafeGetDialogueData(info, donor, item)) {
+                        gotItem = true;
+                    } else if (SafeGetDialogueData(info, player, item)) {
+                        gotItem = true;
                     }
 
-                    if (!item.responses.empty()) {
-                        auto* resp = item.responses.front();
-                        if (resp) {
-                            candidates.push_back({ info, resp, canUsePlayer });
+                    if (gotItem) {
+                        if (!item->responses.empty()) {
+                            auto* resp = item->responses.front();
+                            if (resp) {
+                                candidates.push_back({ info, resp });
+                            }
                         }
+                        item->~DialogueItem();
                     }
                 }
             }
@@ -513,10 +560,7 @@ namespace AlternateActors {
         }
         const auto& chosen = candidates[chosenIdx];
 
-        bool spoken = false;
-        if (chosen.onPlayer) {
-            spoken = player->UpdateInDialogue(chosen.resp, false);
-        }
+        bool spoken = player->UpdateInDialogue(chosen.resp, false);
 
         if (spoken) {
             if (chosen.info->data.flags.any(RE::TOPIC_INFO_DATA::TOPIC_INFO_FLAGS::kSayOnce)) {

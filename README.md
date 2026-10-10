@@ -1,10 +1,20 @@
-# Alternate Actors NG (Skyrim Special Edition)
+# Alternate Actors NG
 
-A modification of the original mod by iceburg. This uses a C++ SKSE64 plugin to seamlessly morph into, control, and play as any NPC in Skyrim Special Edition / Anniversary Edition.
+So here's a question: why doesn't Jarl Elesif clear out wolfskull cave herself?
 
-The SKSE implementation makes the control sequence much faster, and copies appearances a bit more reliably. I also added a couple of features to allow interaction with the NPC while you're still in control of them.
+You might be thinking "because that's stupid, she's not a combatant, and she has people for that. She wouldn't even want to clear out the cave."
 
-Unlike the original mod, this only allows control of NPCs.
+Wrong, totally wrong. If Elesif was allowed to clear out the cave, she would absolutely do it. With her bare hands, if necessary. But the game's limitations hold her back. This mod removes those limitations.
+
+Play as any NPC in the game, so they can solve their own dang problems for once.
+
+---
+
+Casting the "Possess" spell on an NPC will grant you their appearance, stats, spells, and equipment. The dragonborn will follow you around, instead of you following them, but they don't take orders from you! Talking to them will let you access their dialog menu like you normally would.
+
+While you're in control of an NPC, they'll have idle chatter and may walk around if you're not actively controlling them. They'll fight enemies in combat, and you can take control whenever you want and fight, talk, walk, or interact just as you normally would as the dragonborn.
+
+Swap back at any time using the "Return to Body" spell or the MCM menu.
 
 ---
 
