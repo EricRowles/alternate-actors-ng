@@ -22,6 +22,24 @@ namespace AlternateActors {
         vm->DispatchMethodCall(handle, className, funcName, args, callback);
     }
 
+    static bool IsModInternalQuest(RE::TESQuest* a_quest) {
+        if (!a_quest) return false;
+        auto* file = a_quest->GetDescriptionOwnerFile();
+        if (!file) {
+            file = a_quest->GetFile(0);
+        }
+        if (file) {
+            std::string fn(file->GetFilename());
+            std::transform(fn.begin(), fn.end(), fn.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (fn.find("alternate actors") != std::string::npos ||
+                fn.find("alternateactors") != std::string::npos ||
+                fn.find("ak_") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool AliasManager::HasRecord(RE::FormID a_questFormID, std::uint32_t a_aliasID) const {
         for (const auto& r : _swappedRecords) {
             if (r.questFormID == a_questFormID && r.aliasID == a_aliasID) {
@@ -48,6 +66,11 @@ namespace AlternateActors {
 
         for (auto* instance : aliasArray->aliases) {
             if (!instance || !instance->quest || !instance->alias) {
+                continue;
+            }
+
+            // Skip internal Alternate Actors quests to prevent corrupting mod control aliases
+            if (IsModInternalQuest(instance->quest)) {
                 continue;
             }
 

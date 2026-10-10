@@ -40,6 +40,12 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		inprogress = 1
 		debug.setgodmode(true)
 		
+		; Capture original player name before any appearance or trait cloning occurs
+		String origPlayerName = AK_NG.GetOriginalPlayerName()
+		If origPlayerName == ""
+			origPlayerName = playerref.GetActorBase().GetName()
+		EndIf
+
 		akCstopcombatspell.Cast(akimposter)
 		
 		If akquestmcm.Debugmode == False
@@ -58,6 +64,7 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 			akcontroltemp = akcontroltempFemale
 		EndIf
 		akquestfrag.alias_ControlTemp.ForceRefTo(akcontroltemp)
+		AK_NG.SetPuppetActor(akcontroltemp)
 
 		; Transfer traits from PC back to orignpc before getting new traits if we were already controlling an NPC
 		If MainChar == False
@@ -97,6 +104,13 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 		origionalnpc.moveto(AKControlCloneMarker)
 		If akquestmcm.dragonbornfollower == False
 			akcontroltemp.moveto(AKControlCloneMarker)
+			AK_NG.SetPuppetActor(None)
+		Else
+			akcontroltemp.SetPlayerTeammate(True, False)
+			akcontroltemp.SetDisplayName(origPlayerName, True)
+			akcontroltemp.BlockActivation(True)
+			AK_NG.SetPuppetActor(akcontroltemp)
+			akcontroltemp.EvaluatePackage()
 		EndIf
 
 		If akquestmcm.Debugmode == False
@@ -172,6 +186,10 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 			EndIf
 			UnregisterForMenu("Dialogue Menu")
 			
+			akcontroltemp.BlockActivation(False)
+			akcontroltemp.SetDisplayName("")
+			akcontroltemp.SetPlayerTeammate(False, False)
+			AK_NG.SetPuppetActor(None)
 			akcontroltemp.moveto(akcontrolclonemarker)
 			akcontrolclonemarkertemp.moveto(akcontrolclonemarker)
 
@@ -221,7 +239,6 @@ Event OnMenuOpen(String MenuName)
 	If MenuName == "Dialogue Menu" && MainChar == False
 		If origionalnpc != None
 			origionalnpc.SetAlpha(0.0)
-			origionalnpc.SetGhost(True)
 		EndIf
 	EndIf
 EndEvent

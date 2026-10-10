@@ -285,23 +285,6 @@ namespace AlternateActors {
             }
         }
 
-        // Soft matte lighting
-        auto* target3D = a_targetActor->Get3D();
-        if (target3D) {
-            RE::BSVisit::TraverseScenegraphGeometries(target3D, [](RE::BSGeometry* geom) {
-                if (geom) {
-                    auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
-                    if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
-                        if (auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(shaderProp->material)) {
-                            mat->specularColorScale = 0.20f;
-                            mat->specularPower = 10.0f;
-                            mat->subSurfaceLightRolloff = 0.6f;
-                        }
-                    }
-                }
-                return RE::BSVisit::BSVisitControl::kContinue;
-            });
-        }
 
         SKSE::log::info("Applied appearance and AI snapshot (Race: {:08X}, Sex: {}, Voice: {:08X}, Tints: {}, Parts: {}) to actor {:08X}",
             a_snapshot.race ? static_cast<std::uint32_t>(a_snapshot.race->GetFormID()) : 0,

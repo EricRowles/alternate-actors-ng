@@ -93,10 +93,11 @@ namespace AlternateActors::Serialization {
             }
         }
 
-        // 3. Save Dynamic Spells
+        // 3. Save Dynamic Spells & Worn Items
         const auto& transferredSpells = InventoryManager::GetSingleton().GetTransferredSpellIDs();
         const auto& savedPlayerSpells = InventoryManager::GetSingleton().GetSavedPlayerSpellIDs();
-        if (!transferredSpells.empty() || !savedPlayerSpells.empty()) {
+        const auto& savedPlayerWorn = InventoryManager::GetSingleton().GetSavedPlayerWornFormIDs();
+        if (!transferredSpells.empty() || !savedPlayerSpells.empty() || !savedPlayerWorn.empty()) {
             if (a_serde->OpenRecord(kInventoryDataRecord, kSerializationVersion)) {
                 std::uint32_t transCount = static_cast<std::uint32_t>(transferredSpells.size());
                 a_serde->WriteRecordData(&transCount, sizeof(transCount));
@@ -107,6 +108,12 @@ namespace AlternateActors::Serialization {
                 std::uint32_t savedCount = static_cast<std::uint32_t>(savedPlayerSpells.size());
                 a_serde->WriteRecordData(&savedCount, sizeof(savedCount));
                 for (auto id : savedPlayerSpells) {
+                    a_serde->WriteRecordData(&id, sizeof(id));
+                }
+
+                std::uint32_t wornCount = static_cast<std::uint32_t>(savedPlayerWorn.size());
+                a_serde->WriteRecordData(&wornCount, sizeof(wornCount));
+                for (auto id : savedPlayerWorn) {
                     a_serde->WriteRecordData(&id, sizeof(id));
                 }
             }
@@ -295,7 +302,19 @@ namespace AlternateActors::Serialization {
                             InventoryManager::GetSingleton().AddSavedPlayerSpellID(spellID);
                         }
                     }
-                    SKSE::log::info("Loaded {} transferred spells and {} saved player spells from co-save.", transCount, savedCount);
+
+                    std::uint32_t wornCount = 0;
+                    if (a_serde->ReadRecordData(&wornCount, sizeof(wornCount))) {
+                        for (std::uint32_t i = 0; i < wornCount; ++i) {
+                            RE::FormID itemID = 0;
+                            a_serde->ReadRecordData(&itemID, sizeof(itemID));
+                            if (a_serde->ResolveFormID(itemID, itemID)) {
+                                InventoryManager::GetSingleton().AddSavedPlayerWornFormID(itemID);
+                            }
+                        }
+                    }
+                    SKSE::log::info("Loaded {} transferred spells, {} saved player spells, and {} worn items from co-save.",
+                        transCount, savedCount, wornCount);
                     break;
                 }
 

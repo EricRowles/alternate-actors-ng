@@ -87,3 +87,9 @@ Bool Function IsImpersonating() Global Native
 ; Returns the currently impersonated donor actor, or None if inactive.
 Actor Function GetImpersonatedActor() Global Native
 
+; Registers the active puppet actor holding the player's true appearance/identity.
+Function SetPuppetActor(Actor akPuppet) Global Native
+
+; Returns the player's true original character name.
+String Function GetOriginalPlayerName() Global Native
+

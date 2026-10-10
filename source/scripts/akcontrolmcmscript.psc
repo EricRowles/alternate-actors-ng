@@ -66,7 +66,6 @@ event OnPageReset(string page)
 		AddHeaderOption("Autonomous AI")
 		_oid_idleAI = AddToggleOption("Idle AI Pathing", IdleAIEnabled)
 		_oid_idleTimeout = AddSliderOption("Idle AI Delay", IdleAITimeout, "{1} s")
-		_oid_dialogueHotkey = AddKeyMapOption("Morphed Speech Hotkey", DialogueHotkey)
 		_oid_revertOnDeath = AddToggleOption("Revert on Death", RevertOnDeath)
 
 		; Right Column: NPC Impersonation System & Controls
@@ -120,11 +119,6 @@ event OnOptionSelect(int option)
 endEvent
 
 event OnOptionKeyMapChange(int option, int keyCode, string conflictControl, string conflictName)
-	if option == _oid_dialogueHotkey
-		DialogueHotkey = keyCode
-		SetKeyMapOptionValue(_oid_dialogueHotkey, DialogueHotkey)
-		AK_NG.SetDialogueHotkey(DialogueHotkey)
-	endif
 endEvent
 
 event OnOptionSliderOpen(int option)
@@ -149,8 +143,6 @@ event OnOptionHighlight(int option)
 		SetInfoText("Enables autonomous AI pathing on your controlled character after a few seconds of inactivity.")
 	elseif option == _oid_idleTimeout
 		SetInfoText("Seconds of player inactivity before autonomous AI pathing begins.")
-	elseif option == _oid_dialogueHotkey
-		SetInfoText("Hotkey to trigger dialogue or greeting from your morphed identity (default 'V').")
 	elseif option == _oid_revertOnDeath
 		SetInfoText("Revert back to your Dragonborn character if the controlled NPC falls in combat.")
 	elseif option == _oid_revert

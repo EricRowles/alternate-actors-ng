@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "ImpersonationManager.h"
 #include "AliasManager.h"
+#include "FaceManager.h"
 #include "Serialization.h"
 
 #include <RE/C/CommandTable.h>
@@ -20,51 +21,6 @@
 namespace AlternateActors {
 
     static std::array<RE::SCRIPT_FUNCTION::Condition_t*, 0x300> s_originalConditions{ nullptr };
-    static std::array<RE::SCRIPT_FUNCTION::Execute_t*, 0x300> s_originalExecutes{ nullptr };
-
-    template <std::uint16_t ID>
-    static bool IdentityExecuteThunk(
-        const RE::SCRIPT_PARAMETER* a_paramInfo,
-        RE::SCRIPT_FUNCTION::ScriptData* a_scriptData,
-        RE::TESObjectREFR* a_thisObj,
-        RE::TESObjectREFR* a_containingObj,
-        RE::Script* a_scriptObj,
-        RE::ScriptLocals* a_locals,
-        double& a_result,
-        std::uint32_t& a_opcodeOffsetPtr)
-    {
-        auto& mgr = ImpersonationManager::GetSingleton();
-        auto* orig = s_originalExecutes[ID];
-        if (!mgr.IsConditionsEnabled()) {
-            return orig ? orig(a_paramInfo, a_scriptData, a_thisObj, a_containingObj, a_scriptObj, a_locals, a_result, a_opcodeOffsetPtr) : false;
-        }
-
-        auto* player = mgr.GetPlayer();
-        auto* donor = mgr.GetDonor();
-
-        double res = 0.0;
-        std::uint32_t offset = a_opcodeOffsetPtr;
-        bool ok = orig ? orig(a_paramInfo, a_scriptData, a_thisObj, a_containingObj, a_scriptObj, a_locals, res, offset) : false;
-        if (ok && res != 0.0) {
-            a_result = res;
-            a_opcodeOffsetPtr = offset;
-            return true;
-        }
-
-        if (a_thisObj && a_thisObj == player && donor) {
-            double donorRes = 0.0;
-            std::uint32_t donorOffset = a_opcodeOffsetPtr;
-            if (orig && orig(a_paramInfo, a_scriptData, donor, a_containingObj, a_scriptObj, a_locals, donorRes, donorOffset) && donorRes != 0.0) {
-                a_result = donorRes;
-                a_opcodeOffsetPtr = donorOffset;
-                return true;
-            }
-        }
-
-        a_result = res;
-        a_opcodeOffsetPtr = offset;
-        return ok;
-    }
 
     // --- Category A: Identity Thunk ---
     template <std::uint16_t ID>
@@ -77,6 +33,7 @@ namespace AlternateActors {
 
         auto* player = mgr.GetPlayer();
         auto* donor = mgr.GetDonor();
+        auto* puppet = mgr.GetPuppet();
 
         // 1. Run original condition check first
         double res = 0.0;
@@ -86,42 +43,51 @@ namespace AlternateActors {
             return true;
         }
 
-        // 2. If checking on player, try substituting donor
-        if (a_thisObj && a_thisObj == player && donor) {
-            double donorRes = 0.0;
-            if (orig && orig(donor, a_p1, a_p2, donorRes) && donorRes != 0.0) {
-                a_result = donorRes;
-                return true;
+        // 2. If checking on player OR puppet, try substituting donor
+        if (a_thisObj && (a_thisObj == player || (puppet && a_thisObj == puppet))) {
+            if constexpr (ID == 426) {
+                auto* targetVoice = static_cast<RE::TESForm*>(a_p1);
+                if (targetVoice && mgr.GetDonorVoiceType() && targetVoice == mgr.GetDonorVoiceType()) {
+                    a_result = 1.0;
+                    return true;
+                }
             }
 
-            // Fallback for leveled donors in GetIsID (72)
-            if constexpr (ID == 72) {
-                auto* targetForm = static_cast<RE::TESForm*>(a_p1);
-                if (targetForm) {
-                    if (targetForm == donor->GetBaseObject()) {
-                        a_result = 1.0;
-                        return true;
-                    }
-                    if (auto* actorBase = donor->GetActorBase()) {
-                        if (targetForm == actorBase || targetForm == actorBase->GetRootFaceNPC()) {
+            if (donor) {
+                double donorRes = 0.0;
+                if (orig && orig(donor, a_p1, a_p2, donorRes) && donorRes != 0.0) {
+                    a_result = donorRes;
+                    return true;
+                }
+
+                // Fallback for leveled donors in GetIsID (72)
+                if constexpr (ID == 72) {
+                    auto* targetForm = static_cast<RE::TESForm*>(a_p1);
+                    if (targetForm) {
+                        if (targetForm == donor->GetBaseObject()) {
                             a_result = 1.0;
                             return true;
                         }
-                    }
-                    if (auto* extraLeveled = donor->extraList.GetByType<RE::ExtraLeveledCreature>()) {
-                        if (targetForm == extraLeveled->originalBase || targetForm == extraLeveled->templateBase) {
-                            a_result = 1.0;
-                            return true;
+                        if (auto* actorBase = donor->GetActorBase()) {
+                            if (targetForm == actorBase || targetForm == actorBase->GetRootFaceNPC()) {
+                                a_result = 1.0;
+                                return true;
+                            }
+                        }
+                        if (auto* extraLeveled = donor->extraList.GetByType<RE::ExtraLeveledCreature>()) {
+                            if (targetForm == extraLeveled->originalBase || targetForm == extraLeveled->templateBase) {
+                                a_result = 1.0;
+                                return true;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 3. Special case for GetIsAliasRef (566): if checking on donor, retry with player
-        // (the alias now holds the player, and proxy dialogue runs on the donor)
+        // 3. Special case for GetIsAliasRef (566): if checking on donor or puppet, retry with player
         if constexpr (ID == 566) {
-            if (a_thisObj && a_thisObj == donor && player) {
+            if (a_thisObj && (a_thisObj == donor || (puppet && a_thisObj == puppet)) && player) {
                 double playerRes = 0.0;
                 if (orig && orig(player, a_p1, a_p2, playerRes) && playerRes != 0.0) {
                     a_result = playerRes;
@@ -189,6 +155,7 @@ namespace AlternateActors {
 
         auto* player = mgr.GetPlayer();
         auto* donor = mgr.GetDonor();
+        auto* puppet = mgr.GetPuppet();
         if (!player || !donor) {
             return orig ? orig(a_thisObj, a_p1, a_p2, a_result) : false;
         }
@@ -198,13 +165,15 @@ namespace AlternateActors {
 
         // Skip substitution if it would make effectiveThis == effectiveP1
         bool willBeSame = (effectiveThis == player && effectiveP1 == donor) ||
-                          (effectiveThis == donor && effectiveP1 == player);
+                          (effectiveThis == donor && effectiveP1 == player) ||
+                          (effectiveThis == puppet && effectiveP1 == donor) ||
+                          (effectiveThis == donor && effectiveP1 == puppet);
 
         if (!willBeSame) {
-            if (effectiveThis == player) {
+            if (effectiveThis == player || (puppet && effectiveThis == puppet)) {
                 effectiveThis = donor;
             }
-            if (effectiveP1 == player) {
+            if (effectiveP1 == player || (puppet && effectiveP1 == puppet)) {
                 effectiveP1 = donor;
             }
         }
@@ -230,24 +199,38 @@ namespace AlternateActors {
 
     RE::BGSVoiceType* ImpersonationManager::Hook_GetObjectVoiceType(const RE::TESNPC* a_this) {
         if (a_this) {
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (player && a_this == player->GetActorBase()) {
-                auto& mgr = ImpersonationManager::GetSingleton();
-                if (mgr.IsActive()) {
-                    if (auto* donor = mgr.GetDonor(); donor && donor != player) {
-                        if (auto* donorBase = donor->GetActorBase()) {
-                            if (auto* vt = GetNPCVoiceType(donorBase)) {
-                                return vt;
-                            }
-                        }
-                    }
-                    if (a_this->voiceType) {
-                        return a_this->voiceType;
-                    }
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive() && mgr._donorVoiceType) {
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                auto* puppet = mgr.GetPuppet();
+                if ((player && a_this == player->GetActorBase()) ||
+                    (puppet && a_this == puppet->GetActorBase())) {
+                    return mgr._donorVoiceType;
+                }
+                if (a_this->voiceType) {
+                    return a_this->voiceType;
                 }
             }
         }
         return _origGetObjectVoiceType(a_this);
+    }
+
+    bool ImpersonationManager::Hook_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused) {
+        if (a_this) {
+            auto& mgr = ImpersonationManager::GetSingleton();
+            if (mgr.IsActive()) {
+                auto* puppet = mgr.GetPuppet();
+                auto* player = mgr.GetPlayer();
+                if (puppet && a_this == puppet && player) {
+                    SKSE::log::info("Redirecting dialogue response from puppet {:08X} to player {:08X}: '{}'",
+                        static_cast<std::uint32_t>(puppet->GetFormID()),
+                        static_cast<std::uint32_t>(player->GetFormID()),
+                        a_response ? a_response->text.c_str() : "<null>");
+                    return player->UpdateInDialogue(a_response, a_unused);
+                }
+            }
+        }
+        return _origUpdateInDialogue(a_this, a_response, a_unused);
     }
 
     void ImpersonationManager::InstallHooks() {
@@ -258,6 +241,12 @@ namespace AlternateActors {
         _origGetObjectVoiceType = vtbl.write_vfunc(0x49, &Hook_GetObjectVoiceType);
         SKSE::log::info("Hooked TESNPC::GetObjectVoiceType at VTABLE_TESNPC[0] idx 0x49 (orig: {:016X})",
             _origGetObjectVoiceType.address());
+
+        // Hook Character::UpdateInDialogue on primary vtable (index 0x4C)
+        REL::Relocation<std::uintptr_t> charVtbl{ RE::VTABLE_Character[0] };
+        _origUpdateInDialogue = charVtbl.write_vfunc(0x4C, &Hook_UpdateInDialogue);
+        SKSE::log::info("Hooked Character::UpdateInDialogue at VTABLE_Character[0] idx 0x4C (orig: {:016X})",
+            _origUpdateInDialogue.address());
 
         auto* commands = RE::SCRIPT_FUNCTION::GetFirstScriptCommand();
         if (!commands) {
@@ -275,28 +264,13 @@ namespace AlternateActors {
             REL::safe_write(reinterpret_cast<std::uintptr_t>(&commands[id].conditionFunction), reinterpret_cast<std::uintptr_t>(newFunc));
         };
 
-        auto hookExecute = [&](std::uint16_t id, RE::SCRIPT_FUNCTION::Execute_t* newFunc) {
-            if (id >= s_originalExecutes.size()) return;
-            if (!commands[id].executeFunction) {
-                SKSE::log::warn("Script command ID {} has no executeFunction, skipping hook.", id);
-                return;
-            }
-            s_originalExecutes[id] = commands[id].executeFunction;
-            REL::safe_write(reinterpret_cast<std::uintptr_t>(&commands[id].executeFunction), reinterpret_cast<std::uintptr_t>(newFunc));
-        };
-
-        // Category A - Identity (Conditions + Console Command Execution)
+        // Category A - Identity Conditions
         hook(72, IdentityThunk<72>);    // GetIsID
+        hook(73, IdentityThunk<73>);    // GetInFaction
         hook(136, IdentityThunk<136>);  // GetIsReference
         hook(372, IdentityThunk<372>);  // IsInList
         hook(426, IdentityThunk<426>);  // GetIsVoiceType
         hook(566, IdentityThunk<566>);  // GetIsAliasRef
-
-        hookExecute(72, IdentityExecuteThunk<72>);    // GetIsID
-        hookExecute(136, IdentityExecuteThunk<136>);  // GetIsReference
-        hookExecute(372, IdentityExecuteThunk<372>);  // IsInList
-        hookExecute(426, IdentityExecuteThunk<426>);  // GetIsVoiceType
-        hookExecute(566, IdentityExecuteThunk<566>);  // GetIsAliasRef
 
         // Category B - Spatial
         hook(1, SpatialThunk<1, SpatialMode::kThisAndP1>);      // GetDistance
@@ -311,11 +285,6 @@ namespace AlternateActors {
 
         hook(577, SpatialThunk<577, SpatialMode::kThisAndP1AndP2>); // IsCloserToAThanB
 
-        hook(67, SpatialThunk<67, SpatialMode::kThisOnly>);     // GetInCell
-        hook(300, SpatialThunk<300, SpatialMode::kThisOnly>);   // IsInInterior
-        hook(359, SpatialThunk<359, SpatialMode::kThisOnly>);   // GetInCurrentLoc
-        hook(444, SpatialThunk<444, SpatialMode::kThisOnly>);   // GetInCurrentLocFormList
-
         // Category C - Relationship
         hook(258, RelationshipThunk<258>);  // HasAssociationType
         hook(259, RelationshipThunk<259>);  // HasFamilyRelationship
@@ -327,7 +296,7 @@ namespace AlternateActors {
         hook(618, RelationshipThunk<618>);  // HasFamilyRelationshipAny
 
         _hooksInstalled = true;
-        SKSE::log::info("Installed 24 Impersonation condition function hooks, 5 console execution hooks, and GetObjectVoiceType vfunc hook successfully.");
+        SKSE::log::info("Installed 20 Impersonation condition function hooks and GetObjectVoiceType vfunc hook successfully.");
     }
 
     void ImpersonationManager::Initialize() {
@@ -379,6 +348,18 @@ namespace AlternateActors {
         _donorKeepAlive.reset(a_donor);
         _donorHandle = a_donor->GetHandle();
         _savedDonorFormID = a_donor->GetFormID();
+        _donorName = a_donor->GetName();
+        if (FaceManager::GetSingleton().HasSavedAppearance() &&
+            !FaceManager::GetSingleton().GetSavedAppearance().fullName.empty()) {
+            _origPlayerName = FaceManager::GetSingleton().GetSavedAppearance().fullName.c_str();
+        } else {
+            _origPlayerName = a_player->GetName();
+        }
+        if (auto* base = a_donor->GetActorBase()) {
+            _donorVoiceType = GetNPCVoiceType(base);
+        } else {
+            _donorVoiceType = nullptr;
+        }
         _active.store(true, std::memory_order_release);
 
         SKSE::log::info("Beginning impersonation: Donor {:08X} ({}) -> Player {:08X}",
@@ -436,20 +417,68 @@ namespace AlternateActors {
         _donorKeepAlive.reset();
         _donorHandle.reset();
         _savedDonorFormID = 0;
+        _donorVoiceType = nullptr;
+        _donorName.clear();
+        _origPlayerName.clear();
+        SetPuppet(nullptr);
 
         return 1;
     }
 
-    void ImpersonationManager::Tick() {
-        if (!_active.load(std::memory_order_relaxed)) return;
-
-        auto* donor = _donorActor.load(std::memory_order_relaxed);
-        auto* player = _playerActor.load(std::memory_order_relaxed);
-        if (!donor || !player) return;
-
-        if (_options.aliases) {
-            AliasManager::GetSingleton().SwapAliasesToPlayer(donor, player);
+    void ImpersonationManager::SetPuppet(RE::Actor* a_puppet) {
+        if (!a_puppet) {
+            if (auto* oldPuppet = GetPuppet()) {
+                oldPuppet->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kPlayerTeammate);
+                auto* followerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84E); // CurrentFollowerFaction
+                if (followerFaction) {
+                    oldPuppet->AddToFaction(followerFaction, -1);
+                }
+                oldPuppet->EvaluatePackage(false, false);
+                SKSE::log::info("Disengaged follower status from puppet {:08X}",
+                    static_cast<std::uint32_t>(oldPuppet->GetFormID()));
+            }
+            _puppetHandle.reset();
+            return;
         }
+
+        _puppetHandle = a_puppet->GetHandle();
+
+        // 1. Set PlayerTeammate flag so puppet follows player, draws weapons, and assists in combat
+        a_puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+
+        // 2. Add to CurrentFollowerFaction (0x0005C84E) with rank 0
+        auto* followerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84E);
+        if (followerFaction) {
+            a_puppet->AddToFaction(followerFaction, 0);
+        }
+
+        // 3. Ensure in PlayerFaction (0x00000DB1) with rank 0
+        auto* playerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x00000DB1);
+        if (playerFaction) {
+            a_puppet->AddToFaction(playerFaction, 0);
+        }
+
+        // 4. Set puppet display name to original player name
+        if (!_origPlayerName.empty()) {
+            if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
+                base->fullName = _origPlayerName;
+            }
+        }
+
+        // 5. Clear combat, allow dialogue, and evaluate package immediately
+        a_puppet->AllowPCDialogue(true);
+        a_puppet->AllowBleedoutDialogue(true);
+        a_puppet->StopCombat();
+        a_puppet->EvaluatePackage(true, true);
+
+        SKSE::log::info("Configured puppet {:08X} as active player follower.",
+            static_cast<std::uint32_t>(a_puppet->GetFormID()));
+    }
+
+    void ImpersonationManager::Tick() {
+        // Periodic alias swapping during Tick removed:
+        // Aliases are swapped on Begin() and restored on End().
+        // Continual polling here is hazardous during cell transitions and threading.
     }
 
     // --- Layer 3: AI Packages Retargeting ---
@@ -844,6 +873,13 @@ namespace AlternateActors {
                 _playerActor.store(player, std::memory_order_relaxed);
                 _donorKeepAlive.reset(donor);
                 _donorHandle = donor->GetHandle();
+                _donorName = donor->GetName();
+                _origPlayerName = player->GetName();
+                if (auto* base = donor->GetActorBase()) {
+                    _donorVoiceType = GetNPCVoiceType(base);
+                } else {
+                    _donorVoiceType = nullptr;
+                }
                 _active.store(true, std::memory_order_release);
                 SKSE::log::info("Restored impersonation state from co-save: Donor {:08X}", static_cast<std::uint32_t>(_savedDonorFormID));
             }
@@ -859,6 +895,10 @@ namespace AlternateActors {
         _donorKeepAlive.reset();
         _donorHandle.reset();
         _savedDonorFormID = 0;
+        _donorVoiceType = nullptr;
+        _donorName.clear();
+        _origPlayerName.clear();
+        SetPuppet(nullptr);
     }
 
     void ImpersonationManager::OnPostLoadGame() {

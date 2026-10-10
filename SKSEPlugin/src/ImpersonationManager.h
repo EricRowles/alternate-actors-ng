@@ -52,8 +52,21 @@ namespace AlternateActors {
         void Tick();
 
         bool IsActive() const { return _active.load(std::memory_order_relaxed); }
-        RE::Actor* GetDonor() const { return _donorActor.load(std::memory_order_relaxed); }
+        RE::Actor* GetDonor() const {
+            if (!_active.load(std::memory_order_relaxed)) return nullptr;
+            auto handle = _donorHandle.get();
+            return handle ? handle.get() : nullptr;
+        }
         RE::Actor* GetPlayer() const { return _playerActor.load(std::memory_order_relaxed); }
+
+        const std::string& GetDonorName() const { return _donorName; }
+        const std::string& GetOrigPlayerName() const { return _origPlayerName; }
+        RE::BGSVoiceType* GetDonorVoiceType() const { return _donorVoiceType; }
+        void SetPuppet(RE::Actor* a_puppet);
+        RE::Actor* GetPuppet() const {
+            auto handle = _puppetHandle.get();
+            return handle ? handle.get() : nullptr;
+        }
 
         const ImpersonationOptions& GetOptions() const { return _options; }
         void SetOptions(bool a_conditions, bool a_aliases, bool a_packages, bool a_scripts);
@@ -75,6 +88,11 @@ namespace AlternateActors {
         void InstallHooks();
         static RE::BGSVoiceType* Hook_GetObjectVoiceType(const RE::TESNPC* a_this);
         inline static REL::Relocation<decltype(Hook_GetObjectVoiceType)> _origGetObjectVoiceType;
+
+        static bool Hook_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused);
+        using UpdateInDialogue_t = bool(RE::Actor*, RE::DialogueResponse*, bool);
+        inline static REL::Relocation<UpdateInDialogue_t> _origUpdateInDialogue;
+
 
         void RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player);
         void RestorePackages();
@@ -102,6 +120,10 @@ namespace AlternateActors {
         RE::NiPointer<RE::Actor> _donorKeepAlive;
         RE::ActorHandle _donorHandle;
         RE::FormID _savedDonorFormID{ 0 };
+        RE::BGSVoiceType* _donorVoiceType{ nullptr };
+        std::string _donorName;
+        std::string _origPlayerName;
+        RE::ActorHandle _puppetHandle;
 
         ImpersonationOptions _options;
         std::vector<PackageRetargetRecord> _retargetedPackages;

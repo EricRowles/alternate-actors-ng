@@ -5,10 +5,20 @@ AK__QF_AKControlQuest_01000D92 Property akcontrolquest Auto
 bool property duration Auto
 
 Event OnEffectStart(Actor akTarget, Actor akCaster)
-	Actor puppet = akcontrolquest.Alias_ControlTemp.GetReference() as Actor
-	If akTarget == puppet || akTarget == akquest.akcontroltemp || akTarget == akquest.akcontroltempmale || akTarget == akquest.akcontroltempFemale || (akquest.MainChar == False && akTarget == akquest.Playerref)
-		akquest.akrevert(akcaster)
+	Actor puppet = None
+	If akcontrolquest
+		puppet = akcontrolquest.Alias_ControlTemp.GetReference() as Actor
+	EndIf
+	If !puppet && akquest
+		puppet = akquest.akcontroltemp
+	EndIf
+	If akTarget == puppet || (akquest && (akTarget == akquest.akcontroltemp || akTarget == akquest.akcontroltempmale || akTarget == akquest.akcontroltempFemale || (akquest.MainChar == False && akTarget == akquest.Playerref)))
+		If akquest
+			akquest.akrevert(akcaster)
+		EndIf
 	Else
-		akquest.AKMorphComplete(aktarget, akcaster, duration)
+		If akquest
+			akquest.AKMorphComplete(aktarget, akcaster, duration)
+		EndIf
 	EndIf
 EndEvent

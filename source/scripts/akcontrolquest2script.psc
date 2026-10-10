@@ -45,78 +45,7 @@ function akmaintenance()
 	EndIf
 EndFunction
 
-; Console / RaceMenu Functions -----------------------------------------------------------------------------------
-Event OnMenuOpen(String MenuName)
-	if menuname == "Console"
-		utility.WaitMenuMode(0.5)
-		input.tapkey(25) ;p
-		utility.WaitMenuMode(0.1)
-		input.tapkey(38) ;l
-		utility.WaitMenuMode(0.1)
-		input.tapkey(30) ;a
-		utility.WaitMenuMode(0.1)
-		input.tapkey(21) ;y
-		utility.WaitMenuMode(0.1)
-		input.tapkey(18) ;e
-		utility.WaitMenuMode(0.1)
-		input.tapkey(19) ;r
-		utility.WaitMenuMode(0.1)
-		input.tapkey(52) ;.
-		utility.WaitMenuMode(0.1)
-		input.tapkey(31) ;s
-		utility.WaitMenuMode(0.1)
-		input.tapkey(18) ;e
-		utility.WaitMenuMode(0.1)
-		input.tapkey(45) ;x
-		utility.WaitMenuMode(0.1)
-		input.tapkey(46) ;c
-		utility.WaitMenuMode(0.1)
-		input.tapkey(35) ;h
-		utility.WaitMenuMode(0.1)
-		input.tapkey(30) ;a
-		utility.WaitMenuMode(0.1)
-		input.tapkey(49) ;n
-		utility.WaitMenuMode(0.1)
-		input.tapkey(34) ;g
-		utility.WaitMenuMode(0.1)
-		input.tapkey(18) ;e
-		utility.WaitMenuMode(0.1)
-		input.tapkey(28) ;enter
-		utility.WaitMenuMode(0.1)
-		UnRegisterForMenu("Console")
-		input.tapkey(input.getmappedkey("Console", 0))
-	elseif menuname == ("RaceSex Menu")
-		if akquest.inprogress == 1
-			if input.getmappedkey("Ready Weapon") == 278  ;player is using controller		
-				If akquestmcm.Debugmode == False
-					akloadscreenOFF()
-				EndIf
-			EndIf
-			While akquest.inracemenu == True ;used to loop, make keyboard proof
-				utility.WaitMenuMode(0.5)
-				input.tapkey(19) ;r (to finish character Creation, go to name menu)
-				utility.WaitMenuMode(0.2)
-				input.tapkey(28) ;enter (Finish and save character? Yes Please!)
-				utility.WaitMenuMode(0.2)
-				input.tapkey(30) ;a (name character)
-				utility.WaitMenuMode(0.1)
-				input.tapkey(28) ;enter (save name and finish racemenu)
-				utility.WaitMenuMode(0.5)
-			EndWhile
-			if akquestmcm.Debugmode == False && input.getmappedkey("Ready Weapon") == 278 ;toggle menus back off so script can turn them back on.
-				debug.ToggleMenus()
-			EndIf
-		EndIf
-	EndIf
-EndEvent
 
-Event OnMenuClose(String MenuName)
-	if menuname == ("RaceSex Menu") 
-		if akquest.inracemenu == True
-			akquest.inracemenu = False
-		EndIf
-	EndIf
-EndEvent
 
 Function AKLoadScreenON()
 	akloadscreen = 1

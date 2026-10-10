@@ -261,10 +261,23 @@ namespace AlternateActors {
     bool InventoryManager::StoreAndTransferToPlayer(RE::Actor* a_player, RE::Actor* a_donor, RE::Actor* a_storageFollower) {
         if (!a_player || !a_donor) return false;
 
+        _savedPlayerWornFormIDs.clear();
+
         if (a_storageFollower) {
-            TransferAllItems(a_player, a_storageFollower, true);
-            SKSE::log::info("Stored player gear in DragonbornFollower ({:08X}).",
-                static_cast<std::uint32_t>(a_storageFollower->GetFormID()));
+            // Snapshot the player's worn items BEFORE transferring to storage follower
+            auto playerInv = a_player->GetInventory();
+            for (const auto& [boundObj, entryPair] : playerInv) {
+                const auto& entryData = entryPair.second;
+                if (boundObj && entryData && entryData->IsWorn()) {
+                    _savedPlayerWornFormIDs.push_back(boundObj->GetFormID());
+                }
+            }
+
+            // Transfer items to storage follower without equipping anything on the follower!
+            TransferAllItems(a_player, a_storageFollower, false);
+            SKSE::log::info("Stored player gear in DragonbornFollower ({:08X}) (saved {} worn items).",
+                static_cast<std::uint32_t>(a_storageFollower->GetFormID()),
+                _savedPlayerWornFormIDs.size());
         }
 
         // 1. Stash and strip player's dynamic castable spells
@@ -292,9 +305,22 @@ namespace AlternateActors {
         RestorePlayerDynamicSpells(a_player);
 
         if (a_storageFollower) {
-            TransferAllItems(a_storageFollower, a_player, true);
+            // Transfer items back to player without relying on storage follower's worn state
+            TransferAllItems(a_storageFollower, a_player, false);
             SKSE::log::info("Retrieved player gear from DragonbornFollower ({:08X}).",
                 static_cast<std::uint32_t>(a_storageFollower->GetFormID()));
+
+            // Re-equip the items the player was originally wearing
+            auto* equipMgr = RE::ActorEquipManager::GetSingleton();
+            if (equipMgr) {
+                for (auto formID : _savedPlayerWornFormIDs) {
+                    auto* item = RE::TESForm::LookupByID<RE::TESBoundObject>(formID);
+                    if (item) {
+                        equipMgr->EquipObject(a_player, item, nullptr, 1, nullptr, false, true, false, true);
+                    }
+                }
+            }
+            _savedPlayerWornFormIDs.clear();
         }
 
         return true;

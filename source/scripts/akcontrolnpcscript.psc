@@ -11,3 +11,10 @@ Event OnDeath(Actor akKiller)
 		player.DamageActorValue("Health", 99999)
 	EndIf
 EndEvent
+
+Event OnActivate(ObjectReference akActionRef)
+	If akActionRef == Game.GetPlayer()
+		Actor puppet = GetReference() as Actor
+		AK_NG.OpenSelfDialogue(puppet)
+	EndIf
+EndEvent
