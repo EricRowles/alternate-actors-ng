@@ -9,6 +9,7 @@
 #include "RE/B/BSLightingShaderProperty.h"
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSLightingShaderMaterialHairTint.h"
+#include "RE/B/BSLightingShaderMaterialFacegenTint.h"
 
 namespace AlternateActors {
 
@@ -22,7 +23,7 @@ namespace AlternateActors {
         if (!npc) return false;
 
         a_outSnapshot.race = npc->GetRace();
-        a_outSnapshot.faceNPC = (npc->faceNPC && npc->faceNPC != npc) ? npc->faceNPC : npc;
+        a_outSnapshot.faceNPC = (npc->faceNPC && npc->faceNPC != npc && npc->faceNPC->GetFormID() != 0x07) ? npc->faceNPC : nullptr;
         a_outSnapshot.fullName = npc->GetFullName();
         a_outSnapshot.height = npc->height;
         a_outSnapshot.weight = npc->weight;
@@ -51,6 +52,25 @@ namespace AlternateActors {
                         if (auto* hairMat = skyrim_cast<RE::BSLightingShaderMaterialHairTint*>(shaderProp->material)) {
                             a_outSnapshot.hairTintColor = hairMat->tintColor;
                             a_outSnapshot.hasHairTintColor = true;
+                            return RE::BSVisit::BSVisitControl::kStop;
+                        }
+                    }
+                }
+                return RE::BSVisit::BSVisitControl::kContinue;
+            });
+        }
+
+        // Capture 3D rendered skin tint directly from face 3D geometry
+        a_outSnapshot.hasSkinTintColor = false;
+        auto* faceObj = a_actor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
+        if (faceObj) {
+            RE::BSVisit::TraverseScenegraphGeometries(faceObj, [&](RE::BSGeometry* geom) {
+                if (geom) {
+                    auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
+                    if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                            a_outSnapshot.skinTintColor = faceMat->tintColor;
+                            a_outSnapshot.hasSkinTintColor = true;
                             return RE::BSVisit::BSVisitControl::kStop;
                         }
                     }
@@ -131,7 +151,14 @@ namespace AlternateActors {
             targetNPC->race = a_snapshot.race;
             targetNPC->originalRace = a_snapshot.race;
         }
-        targetNPC->faceNPC = (a_snapshot.faceNPC && a_snapshot.faceNPC != targetNPC) ? a_snapshot.faceNPC : nullptr;
+
+        auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+        bool isPuppet = (puppet && a_targetActor == puppet);
+        if (!isPuppet && a_snapshot.faceNPC && a_snapshot.faceNPC != targetNPC && a_snapshot.faceNPC->GetFormID() != 0x07) {
+            targetNPC->faceNPC = a_snapshot.faceNPC;
+        } else {
+            targetNPC->faceNPC = nullptr;
+        }
 
         if (!a_snapshot.fullName.empty()) {
             targetNPC->fullName = a_snapshot.fullName;
@@ -259,10 +286,10 @@ namespace AlternateActors {
         }
 
         // 8. Synchronous 3D mesh and skin update
-        a_targetActor->UpdateHairColor();
-        a_targetActor->UpdateSkinColor();
         a_targetActor->DoReset3D(true);
         a_targetActor->Update3DModel();
+        a_targetActor->UpdateHairColor();
+        a_targetActor->UpdateSkinColor();
 
         // Apply hair tint directly to hair geometry
         if (a_snapshot.hasHairTintColor) {
@@ -280,6 +307,33 @@ namespace AlternateActors {
                     return RE::BSVisit::BSVisitControl::kContinue;
                 });
             }
+        }
+
+        // Apply face skin tint directly to face / head geometries
+        RE::NiColor skinTint;
+        bool hasSkinTint = false;
+        if (a_snapshot.hasSkinTintColor) {
+            skinTint = a_snapshot.skinTintColor;
+            hasSkinTint = true;
+        } else if (a_snapshot.bodyTintColor.red != 0 || a_snapshot.bodyTintColor.green != 0 || a_snapshot.bodyTintColor.blue != 0) {
+            skinTint.red = static_cast<float>(a_snapshot.bodyTintColor.red) / 255.0f;
+            skinTint.green = static_cast<float>(a_snapshot.bodyTintColor.green) / 255.0f;
+            skinTint.blue = static_cast<float>(a_snapshot.bodyTintColor.blue) / 255.0f;
+            hasSkinTint = true;
+        }
+
+        if (hasSkinTint && a_targetActor->Get3D()) {
+            RE::BSVisit::TraverseScenegraphGeometries(a_targetActor->Get3D(), [&](RE::BSGeometry* geom) {
+                if (geom) {
+                    auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
+                    if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                            faceMat->tintColor = skinTint;
+                        }
+                    }
+                }
+                return RE::BSVisit::BSVisitControl::kContinue;
+            });
         }
 
 
@@ -327,6 +381,11 @@ namespace AlternateActors {
             }
         }
 
+        if (CaptureSnapshot(a_donor, _donorAppearance)) {
+            _hasDonorAppearance = true;
+            return ApplySnapshot(a_target, _donorAppearance);
+        }
+
         return CopyAppearance(a_donor, a_target);
     }
 
@@ -342,10 +401,51 @@ namespace AlternateActors {
         bool result = ApplySnapshot(a_target, _savedOriginalAppearance);
         if (result) {
             _hasSavedAppearance = false;
+            _hasDonorAppearance = false;
             SKSE::log::info("Successfully reverted appearance of actor {:08X} to original.",
                 static_cast<std::uint32_t>(a_target->GetFormID()));
         }
         return result;
+    }
+
+    bool FaceManager::RestoreDonorAppearance(RE::Actor* a_donor, RE::Actor* a_target) {
+        if (!a_target) return false;
+
+        if (_hasDonorAppearance) {
+            SKSE::log::info("Restoring donor appearance from saved donor snapshot onto actor {:08X}",
+                static_cast<std::uint32_t>(a_target->GetFormID()));
+            return ApplySnapshot(a_target, _donorAppearance);
+        }
+
+        if (a_donor) {
+            SKSE::log::info("Restoring donor appearance from donor actor {:08X} onto actor {:08X}",
+                static_cast<std::uint32_t>(a_donor->GetFormID()),
+                static_cast<std::uint32_t>(a_target->GetFormID()));
+            if (CaptureSnapshot(a_donor, _donorAppearance)) {
+                _hasDonorAppearance = true;
+                return ApplySnapshot(a_target, _donorAppearance);
+            }
+            return CopyAppearance(a_donor, a_target);
+        }
+
+        return false;
+    }
+
+    bool FaceManager::RestoreOriginalPuppetAppearance(RE::Actor* a_puppet) {
+        if (!a_puppet) return false;
+
+        if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
+            base->faceNPC = nullptr;
+        }
+
+        if (!_hasSavedAppearance) {
+            SKSE::log::warn("RestoreOriginalPuppetAppearance called, but no original appearance was saved.");
+            return false;
+        }
+
+        SKSE::log::info("Restoring original Dragonborn appearance onto puppet actor {:08X}",
+            static_cast<std::uint32_t>(a_puppet->GetFormID()));
+        return ApplySnapshot(a_puppet, _savedOriginalAppearance);
     }
 
 }

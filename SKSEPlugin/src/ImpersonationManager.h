@@ -82,6 +82,8 @@ namespace AlternateActors {
         void ResetSpeechTracking();
         bool CheckPlayerSpeakingDone();
         void OnDialogueResponseStarted(RE::DialogueResponse* a_response);
+        bool IsPlayerSpeaking() const { return _playerSpeaking.load(std::memory_order_relaxed); }
+        void SyncDonorUpdatesToPlayer();
 
     private:
         ImpersonationManager() = default;
@@ -153,6 +155,7 @@ namespace AlternateActors {
         std::atomic<bool> _speechHadSound{ false };
         std::chrono::steady_clock::time_point _speechStartTime{ std::chrono::steady_clock::now() };
         float _speechMinDuration{ 2.0f };
+        std::uint32_t _dialogueSoundID{ static_cast<std::uint32_t>(-1) };
 
         ImpersonationOptions _options;
         std::vector<PackageRetargetRecord> _retargetedPackages;

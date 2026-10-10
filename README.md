@@ -1,18 +1,16 @@
 # Alternate Actors NG
 
-So here's a question: why doesn't Jarl Elisif clear out wolfskull cave herself?
+So here's a question: why doesn't Jarl Elisif clear out wolfskull cave herself? Because she's busy ruling Solitude? Because she doesn't think it's a threat? Because she's not a combatant?
 
-You might be thinking "Because she's not a combatant, and she's busy ruling Solitude. She wouldn't want to clear out the cave even if she could."
-
-Wrong, totally wrong. If Elisif was allowed to clear out the cave, she would absolutely do it. With her bare hands, if necessary. But the game's limitations hold her back. This mod removes those limitations.
+Wrong, totally wrong. If Elisif was allowed to clear out the cave, she would absolutely do it. With her bare hands, if necessary. But the game's limitations have held her back. Until now.
 
 Play as any NPC in the game, so they can solve their own dang problems for once.
 
 ---
 
-Casting the "Possess" spell on an NPC will grant you their appearance, stats, spells, and equipment. The dragonborn will follow you around, instead of you following them, but they don't take orders from you! Talking to them will let you access their dialog menu like you normally would.
+Casting the "Possess" spell on an NPC will grant you their appearance, stats, spells, and equipment. The dragonborn will follow you around to assist in combat. Talking to them will open your own dialog menu, allowing you to select questions for them to ask you.
 
-While you're in control of an NPC, they'll have idle chatter and may walk around if you're not actively controlling them. They'll fight enemies in combat, and you can take control whenever you want and fight, talk, walk, or interact just as you normally would as the dragonborn.
+While you're in control of an NPC, they'll have idle chatter and may walk around if you're not actively controlling them. They'll fight enemies in combat. You can take control whenever you want to fight, talk, walk, or interact just as you normally would as the dragonborn.
 
 Swap back at any time using the "Return to Body" spell or the MCM menu.
 

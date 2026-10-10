@@ -136,68 +136,6 @@ namespace AlternateActors::Papyrus {
         ImpersonationManager::GetSingleton().SetPuppet(a_puppet);
     }
 
-    // ControlMap::ToggleControls notifies camera/input handlers and must run on the main thread,
-    // not on a Papyrus VM thread, otherwise it races the render/update loop.
-    static void ToggleControlsOnMainThread(
-        bool a_enable,
-        bool a_movement,
-        bool a_fighting,
-        bool a_camSwitch,
-        bool a_looking,
-        bool a_sneaking,
-        bool a_menu,
-        bool a_activate)
-    {
-        using Flag = RE::UserEvents::USER_EVENT_FLAG;
-        std::uint32_t mask = 0;
-        if (a_movement) mask |= static_cast<std::uint32_t>(Flag::kMovement);
-        if (a_fighting) mask |= static_cast<std::uint32_t>(Flag::kFighting);
-        if (a_camSwitch) mask |= static_cast<std::uint32_t>(Flag::kPOVSwitch);
-        if (a_looking) mask |= static_cast<std::uint32_t>(Flag::kLooking);
-        if (a_sneaking) mask |= static_cast<std::uint32_t>(Flag::kSneaking);
-        if (a_menu) mask |= static_cast<std::uint32_t>(Flag::kMenu);
-        if (a_activate) mask |= static_cast<std::uint32_t>(Flag::kActivate);
-
-        SKSE::log::info("{}PlayerControls requested (mask=0x{:X}), queueing to main thread.",
-            a_enable ? "Enable" : "Disable", mask);
-
-        auto* tasks = SKSE::GetTaskInterface();
-        if (!tasks) return;
-        tasks->AddTask([mask, a_enable]() {
-            auto* controlMap = RE::ControlMap::GetSingleton();
-            if (!controlMap) return;
-            controlMap->ToggleControls(static_cast<Flag>(mask), a_enable);
-            SKSE::log::info("{}PlayerControls applied on main thread (mask=0x{:X}).",
-                a_enable ? "Enable" : "Disable", mask);
-        });
-    }
-
-    void DisablePlayerControls(
-        RE::StaticFunctionTag*,
-        bool a_movement,
-        bool a_fighting,
-        bool a_camSwitch,
-        bool a_looking,
-        bool a_sneaking,
-        bool a_menu,
-        bool a_activate)
-    {
-        ToggleControlsOnMainThread(false, a_movement, a_fighting, a_camSwitch, a_looking, a_sneaking, a_menu, a_activate);
-    }
-
-    void EnablePlayerControls(
-        RE::StaticFunctionTag*,
-        bool a_movement,
-        bool a_fighting,
-        bool a_camSwitch,
-        bool a_looking,
-        bool a_sneaking,
-        bool a_menu,
-        bool a_activate)
-    {
-        ToggleControlsOnMainThread(true, a_movement, a_fighting, a_camSwitch, a_looking, a_sneaking, a_menu, a_activate);
-    }
-
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
             SKSE::log::error("Papyrus VM is null!");
@@ -233,8 +171,6 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("GetImpersonatedActor", className, GetImpersonatedActor);
         a_vm->RegisterFunction("SetPuppetActor", className, SetPuppetActor);
         a_vm->RegisterFunction("GetOriginalPlayerName", className, GetOriginalPlayerName);
-        a_vm->RegisterFunction("DisablePlayerControls", className, DisablePlayerControls);
-        a_vm->RegisterFunction("EnablePlayerControls", className, EnablePlayerControls);
 
         SKSE::log::info("Registered AK_NG Papyrus functions.");
         return true;

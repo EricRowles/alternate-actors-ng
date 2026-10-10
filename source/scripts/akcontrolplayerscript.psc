@@ -13,20 +13,18 @@ Event OnEnterBleedout()
 	If akquest.MainChar == False && akquestmcm.RevertOnDeath == True
 		playerref.RestoreActorValue("Health", 100.0)
 		
+		Actor deadNPC = akquest.origionalnpc
+
 		; Return player back to original character safely
 		akquest.akrevert(playerref)
 		
-		While akquest.inprogress
-			Utility.Wait(0.1)
-		EndWhile
-		
 		; If the original NPC should die on death and is not essential:
-		If akquest.origionalnpc != None
-			If !akquest.origionalnpc.GetActorBase().IsEssential()
-				If akquest.origionalnpc.Is3DLoaded()
-					akquest.origionalnpc.Kill()
+		If deadNPC != None
+			If !deadNPC.GetActorBase().IsEssential()
+				If deadNPC.Is3DLoaded()
+					deadNPC.Kill()
 				Else
-					akquest.origionalnpc.DamageActorValue("Health", 99999)
+					deadNPC.DamageActorValue("Health", 99999)
 				EndIf
 			EndIf
 		EndIf

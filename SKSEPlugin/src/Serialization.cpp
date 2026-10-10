@@ -24,6 +24,71 @@ namespace AlternateActors::Serialization {
         SKSE::log::info("Registered SKSE Co-Save Serialization callbacks for ALTA.");
     }
 
+    static void WriteFaceSnapshotRecord(SKSE::SerializationInterface* a_serde, std::uint32_t a_recordType, const FaceSnapshot& a_face) {
+        if (!a_serde->OpenRecord(a_recordType, kSerializationVersion)) {
+            return;
+        }
+
+        RE::FormID raceID = a_face.race ? a_face.race->GetFormID() : 0;
+        RE::FormID faceNPCID = (a_face.faceNPC && a_face.faceNPC->GetFormID() != 0x07) ? a_face.faceNPC->GetFormID() : 0;
+        RE::FormID hairColorID = a_face.hairColor ? a_face.hairColor->GetFormID() : 0;
+        RE::FormID voiceTypeID = a_face.voiceType ? a_face.voiceType->GetFormID() : 0;
+        RE::FormID classID = a_face.npcClass ? a_face.npcClass->GetFormID() : 0;
+        RE::FormID combatStyleID = a_face.combatStyle ? a_face.combatStyle->GetFormID() : 0;
+        RE::FormID defaultPackListID = a_face.defaultPackList ? a_face.defaultPackList->GetFormID() : 0;
+
+        a_serde->WriteRecordData(&raceID, sizeof(raceID));
+        a_serde->WriteRecordData(&faceNPCID, sizeof(faceNPCID));
+        a_serde->WriteRecordData(&hairColorID, sizeof(hairColorID));
+        a_serde->WriteRecordData(&voiceTypeID, sizeof(voiceTypeID));
+        a_serde->WriteRecordData(&a_face.bodyTintColor, sizeof(a_face.bodyTintColor));
+        a_serde->WriteRecordData(&a_face.height, sizeof(a_face.height));
+        a_serde->WriteRecordData(&a_face.weight, sizeof(a_face.weight));
+
+        std::uint8_t sexVal = static_cast<std::uint8_t>(a_face.sex);
+        a_serde->WriteRecordData(&sexVal, sizeof(sexVal));
+
+        a_serde->WriteRecordData(a_face.morphs, sizeof(a_face.morphs));
+        a_serde->WriteRecordData(a_face.parts, sizeof(a_face.parts));
+
+        std::uint32_t hpCount = static_cast<std::uint32_t>(a_face.headParts.size());
+        a_serde->WriteRecordData(&hpCount, sizeof(hpCount));
+        for (auto* hp : a_face.headParts) {
+            RE::FormID hpID = hp ? hp->GetFormID() : 0;
+            a_serde->WriteRecordData(&hpID, sizeof(hpID));
+        }
+
+        a_serde->WriteRecordData(&a_face.hasHairTintColor, sizeof(a_face.hasHairTintColor));
+        a_serde->WriteRecordData(&a_face.hairTintColor.red, sizeof(a_face.hairTintColor.red));
+        a_serde->WriteRecordData(&a_face.hairTintColor.green, sizeof(a_face.hairTintColor.green));
+        a_serde->WriteRecordData(&a_face.hairTintColor.blue, sizeof(a_face.hairTintColor.blue));
+
+        a_serde->WriteRecordData(&classID, sizeof(classID));
+        a_serde->WriteRecordData(&combatStyleID, sizeof(combatStyleID));
+        a_serde->WriteRecordData(&defaultPackListID, sizeof(defaultPackListID));
+        a_serde->WriteRecordData(&a_face.aiData, sizeof(a_face.aiData));
+
+        std::uint32_t pkgCount = static_cast<std::uint32_t>(a_face.packages.size());
+        a_serde->WriteRecordData(&pkgCount, sizeof(pkgCount));
+        for (auto* pkg : a_face.packages) {
+            RE::FormID pkgID = pkg ? pkg->GetFormID() : 0;
+            a_serde->WriteRecordData(&pkgID, sizeof(pkgID));
+        }
+
+        // Tint layers
+        std::uint32_t tintCount = static_cast<std::uint32_t>(a_face.tintLayers.size());
+        a_serde->WriteRecordData(&tintCount, sizeof(tintCount));
+        for (const auto& layer : a_face.tintLayers) {
+            a_serde->WriteRecordData(&layer, sizeof(RE::TESNPC::Layer));
+        }
+
+        // Skin tint color
+        a_serde->WriteRecordData(&a_face.hasSkinTintColor, sizeof(a_face.hasSkinTintColor));
+        a_serde->WriteRecordData(&a_face.skinTintColor.red, sizeof(a_face.skinTintColor.red));
+        a_serde->WriteRecordData(&a_face.skinTintColor.green, sizeof(a_face.skinTintColor.green));
+        a_serde->WriteRecordData(&a_face.skinTintColor.blue, sizeof(a_face.skinTintColor.blue));
+    }
+
     void SaveCallback(SKSE::SerializationInterface* a_serde) {
         if (!a_serde) return;
 
@@ -41,56 +106,14 @@ namespace AlternateActors::Serialization {
             }
         }
 
-        // 2. Save Face Snapshot
+        // 2. Save Face Snapshot (Original appearance to revert to)
         if (FaceManager::GetSingleton().HasSavedAppearance()) {
-            const auto& face = FaceManager::GetSingleton().GetSavedAppearance();
-            if (a_serde->OpenRecord(kFaceDataRecord, kSerializationVersion)) {
-                RE::FormID raceID = face.race ? face.race->GetFormID() : 0;
-                RE::FormID faceNPCID = face.faceNPC ? face.faceNPC->GetFormID() : 0;
-                RE::FormID hairColorID = face.hairColor ? face.hairColor->GetFormID() : 0;
-                RE::FormID voiceTypeID = face.voiceType ? face.voiceType->GetFormID() : 0;
-                RE::FormID classID = face.npcClass ? face.npcClass->GetFormID() : 0;
-                RE::FormID combatStyleID = face.combatStyle ? face.combatStyle->GetFormID() : 0;
-                RE::FormID defaultPackListID = face.defaultPackList ? face.defaultPackList->GetFormID() : 0;
+            WriteFaceSnapshotRecord(a_serde, kFaceDataRecord, FaceManager::GetSingleton().GetSavedAppearance());
+        }
 
-                a_serde->WriteRecordData(&raceID, sizeof(raceID));
-                a_serde->WriteRecordData(&faceNPCID, sizeof(faceNPCID));
-                a_serde->WriteRecordData(&hairColorID, sizeof(hairColorID));
-                a_serde->WriteRecordData(&voiceTypeID, sizeof(voiceTypeID));
-                a_serde->WriteRecordData(&face.bodyTintColor, sizeof(face.bodyTintColor));
-                a_serde->WriteRecordData(&face.height, sizeof(face.height));
-                a_serde->WriteRecordData(&face.weight, sizeof(face.weight));
-
-                std::uint8_t sexVal = static_cast<std::uint8_t>(face.sex);
-                a_serde->WriteRecordData(&sexVal, sizeof(sexVal));
-
-                a_serde->WriteRecordData(face.morphs, sizeof(face.morphs));
-                a_serde->WriteRecordData(face.parts, sizeof(face.parts));
-
-                std::uint32_t hpCount = static_cast<std::uint32_t>(face.headParts.size());
-                a_serde->WriteRecordData(&hpCount, sizeof(hpCount));
-                for (auto* hp : face.headParts) {
-                    RE::FormID hpID = hp ? hp->GetFormID() : 0;
-                    a_serde->WriteRecordData(&hpID, sizeof(hpID));
-                }
-
-                a_serde->WriteRecordData(&face.hasHairTintColor, sizeof(face.hasHairTintColor));
-                a_serde->WriteRecordData(&face.hairTintColor.red, sizeof(face.hairTintColor.red));
-                a_serde->WriteRecordData(&face.hairTintColor.green, sizeof(face.hairTintColor.green));
-                a_serde->WriteRecordData(&face.hairTintColor.blue, sizeof(face.hairTintColor.blue));
-
-                a_serde->WriteRecordData(&classID, sizeof(classID));
-                a_serde->WriteRecordData(&combatStyleID, sizeof(combatStyleID));
-                a_serde->WriteRecordData(&defaultPackListID, sizeof(defaultPackListID));
-                a_serde->WriteRecordData(&face.aiData, sizeof(face.aiData));
-
-                std::uint32_t pkgCount = static_cast<std::uint32_t>(face.packages.size());
-                a_serde->WriteRecordData(&pkgCount, sizeof(pkgCount));
-                for (auto* pkg : face.packages) {
-                    RE::FormID pkgID = pkg ? pkg->GetFormID() : 0;
-                    a_serde->WriteRecordData(&pkgID, sizeof(pkgID));
-                }
-            }
+        // 2b. Save Active Donor Face Snapshot
+        if (FaceManager::GetSingleton().HasDonorAppearance()) {
+            WriteFaceSnapshotRecord(a_serde, kDonorFaceDataRecord, FaceManager::GetSingleton().GetDonorAppearance());
         }
 
         // 3. Save Dynamic Spells & Worn Items
@@ -170,6 +193,106 @@ namespace AlternateActors::Serialization {
         SKSE::log::info("Completed SKSE Co-Save serialization write.");
     }
 
+    static bool ReadFaceSnapshotRecord(SKSE::SerializationInterface* a_serde, FaceSnapshot& a_outFace) {
+        RE::FormID raceID = 0, faceNPCID = 0, hairColorID = 0, voiceTypeID = 0;
+        RE::FormID classID = 0, combatStyleID = 0, defaultPackListID = 0;
+
+        if (!a_serde->ReadRecordData(&raceID, sizeof(raceID))) return false;
+        a_serde->ReadRecordData(&faceNPCID, sizeof(faceNPCID));
+        a_serde->ReadRecordData(&hairColorID, sizeof(hairColorID));
+        a_serde->ReadRecordData(&voiceTypeID, sizeof(voiceTypeID));
+        a_serde->ReadRecordData(&a_outFace.bodyTintColor, sizeof(a_outFace.bodyTintColor));
+        a_serde->ReadRecordData(&a_outFace.height, sizeof(a_outFace.height));
+        a_serde->ReadRecordData(&a_outFace.weight, sizeof(a_outFace.weight));
+
+        std::uint8_t sexVal = 0;
+        a_serde->ReadRecordData(&sexVal, sizeof(sexVal));
+        a_outFace.sex = static_cast<RE::SEX>(sexVal);
+
+        a_serde->ReadRecordData(a_outFace.morphs, sizeof(a_outFace.morphs));
+        a_serde->ReadRecordData(a_outFace.parts, sizeof(a_outFace.parts));
+
+        std::uint32_t hpCount = 0;
+        if (a_serde->ReadRecordData(&hpCount, sizeof(hpCount))) {
+            for (std::uint32_t i = 0; i < hpCount; ++i) {
+                RE::FormID hpID = 0;
+                a_serde->ReadRecordData(&hpID, sizeof(hpID));
+                if (a_serde->ResolveFormID(hpID, hpID)) {
+                    auto* hp = RE::TESForm::LookupByID<RE::BGSHeadPart>(hpID);
+                    if (hp) a_outFace.headParts.push_back(hp);
+                }
+            }
+        }
+
+        a_serde->ReadRecordData(&a_outFace.hasHairTintColor, sizeof(a_outFace.hasHairTintColor));
+        a_serde->ReadRecordData(&a_outFace.hairTintColor.red, sizeof(a_outFace.hairTintColor.red));
+        a_serde->ReadRecordData(&a_outFace.hairTintColor.green, sizeof(a_outFace.hairTintColor.green));
+        a_serde->ReadRecordData(&a_outFace.hairTintColor.blue, sizeof(a_outFace.hairTintColor.blue));
+
+        a_serde->ReadRecordData(&classID, sizeof(classID));
+        a_serde->ReadRecordData(&combatStyleID, sizeof(combatStyleID));
+        a_serde->ReadRecordData(&defaultPackListID, sizeof(defaultPackListID));
+        a_serde->ReadRecordData(&a_outFace.aiData, sizeof(a_outFace.aiData));
+
+        std::uint32_t pkgCount = 0;
+        if (a_serde->ReadRecordData(&pkgCount, sizeof(pkgCount))) {
+            for (std::uint32_t i = 0; i < pkgCount; ++i) {
+                RE::FormID pkgID = 0;
+                a_serde->ReadRecordData(&pkgID, sizeof(pkgID));
+                if (a_serde->ResolveFormID(pkgID, pkgID)) {
+                    auto* pkg = RE::TESForm::LookupByID<RE::TESPackage>(pkgID);
+                    if (pkg) a_outFace.packages.push_back(pkg);
+                }
+            }
+        }
+
+        if (a_serde->ResolveFormID(raceID, raceID)) {
+            a_outFace.race = RE::TESForm::LookupByID<RE::TESRace>(raceID);
+        }
+        if (a_serde->ResolveFormID(faceNPCID, faceNPCID)) {
+            if (faceNPCID != 0x07) {
+                a_outFace.faceNPC = RE::TESForm::LookupByID<RE::TESNPC>(faceNPCID);
+            } else {
+                a_outFace.faceNPC = nullptr;
+            }
+        }
+        if (a_serde->ResolveFormID(hairColorID, hairColorID)) {
+            a_outFace.hairColor = RE::TESForm::LookupByID<RE::BGSColorForm>(hairColorID);
+        }
+        if (a_serde->ResolveFormID(voiceTypeID, voiceTypeID)) {
+            a_outFace.voiceType = RE::TESForm::LookupByID<RE::BGSVoiceType>(voiceTypeID);
+        }
+        if (a_serde->ResolveFormID(classID, classID)) {
+            a_outFace.npcClass = RE::TESForm::LookupByID<RE::TESClass>(classID);
+        }
+        if (a_serde->ResolveFormID(combatStyleID, combatStyleID)) {
+            a_outFace.combatStyle = RE::TESForm::LookupByID<RE::TESCombatStyle>(combatStyleID);
+        }
+        if (a_serde->ResolveFormID(defaultPackListID, defaultPackListID)) {
+            a_outFace.defaultPackList = RE::TESForm::LookupByID<RE::BGSListForm>(defaultPackListID);
+        }
+
+        // Optional tint layers (v2+)
+        std::uint32_t tintCount = 0;
+        if (a_serde->ReadRecordData(&tintCount, sizeof(tintCount))) {
+            for (std::uint32_t i = 0; i < tintCount; ++i) {
+                RE::TESNPC::Layer layer{};
+                if (a_serde->ReadRecordData(&layer, sizeof(RE::TESNPC::Layer))) {
+                    a_outFace.tintLayers.push_back(layer);
+                }
+            }
+        }
+
+        // Optional skin tint color (v2+)
+        if (a_serde->ReadRecordData(&a_outFace.hasSkinTintColor, sizeof(a_outFace.hasSkinTintColor))) {
+            a_serde->ReadRecordData(&a_outFace.skinTintColor.red, sizeof(a_outFace.skinTintColor.red));
+            a_serde->ReadRecordData(&a_outFace.skinTintColor.green, sizeof(a_outFace.skinTintColor.green));
+            a_serde->ReadRecordData(&a_outFace.skinTintColor.blue, sizeof(a_outFace.skinTintColor.blue));
+        }
+
+        return true;
+    }
+
     void LoadCallback(SKSE::SerializationInterface* a_serde) {
         if (!a_serde) return;
 
@@ -180,8 +303,8 @@ namespace AlternateActors::Serialization {
         std::uint32_t length;
 
         while (a_serde->GetNextRecordInfo(type, version, length)) {
-            if (version != kSerializationVersion) {
-                SKSE::log::warn("Skipping record {:08X} with unknown version {}", type, version);
+            if (version > kSerializationVersion) {
+                SKSE::log::warn("Skipping record {:08X} with newer unknown version {}", type, version);
                 continue;
             }
 
@@ -205,80 +328,19 @@ namespace AlternateActors::Serialization {
 
                 case kFaceDataRecord: {
                     FaceSnapshot face{};
-                    RE::FormID raceID = 0, faceNPCID = 0, hairColorID = 0, voiceTypeID = 0;
-                    RE::FormID classID = 0, combatStyleID = 0, defaultPackListID = 0;
-
-                    a_serde->ReadRecordData(&raceID, sizeof(raceID));
-                    a_serde->ReadRecordData(&faceNPCID, sizeof(faceNPCID));
-                    a_serde->ReadRecordData(&hairColorID, sizeof(hairColorID));
-                    a_serde->ReadRecordData(&voiceTypeID, sizeof(voiceTypeID));
-                    a_serde->ReadRecordData(&face.bodyTintColor, sizeof(face.bodyTintColor));
-                    a_serde->ReadRecordData(&face.height, sizeof(face.height));
-                    a_serde->ReadRecordData(&face.weight, sizeof(face.weight));
-
-                    std::uint8_t sexVal = 0;
-                    a_serde->ReadRecordData(&sexVal, sizeof(sexVal));
-                    face.sex = static_cast<RE::SEX>(sexVal);
-
-                    a_serde->ReadRecordData(face.morphs, sizeof(face.morphs));
-                    a_serde->ReadRecordData(face.parts, sizeof(face.parts));
-
-                    std::uint32_t hpCount = 0;
-                    a_serde->ReadRecordData(&hpCount, sizeof(hpCount));
-                    for (std::uint32_t i = 0; i < hpCount; ++i) {
-                        RE::FormID hpID = 0;
-                        a_serde->ReadRecordData(&hpID, sizeof(hpID));
-                        if (a_serde->ResolveFormID(hpID, hpID)) {
-                            auto* hp = RE::TESForm::LookupByID<RE::BGSHeadPart>(hpID);
-                            if (hp) face.headParts.push_back(hp);
-                        }
+                    if (ReadFaceSnapshotRecord(a_serde, face)) {
+                        FaceManager::GetSingleton().SetSavedAppearance(face);
+                        SKSE::log::info("Loaded saved player face appearance from co-save.");
                     }
+                    break;
+                }
 
-                    a_serde->ReadRecordData(&face.hasHairTintColor, sizeof(face.hasHairTintColor));
-                    a_serde->ReadRecordData(&face.hairTintColor.red, sizeof(face.hairTintColor.red));
-                    a_serde->ReadRecordData(&face.hairTintColor.green, sizeof(face.hairTintColor.green));
-                    a_serde->ReadRecordData(&face.hairTintColor.blue, sizeof(face.hairTintColor.blue));
-
-                    a_serde->ReadRecordData(&classID, sizeof(classID));
-                    a_serde->ReadRecordData(&combatStyleID, sizeof(combatStyleID));
-                    a_serde->ReadRecordData(&defaultPackListID, sizeof(defaultPackListID));
-                    a_serde->ReadRecordData(&face.aiData, sizeof(face.aiData));
-
-                    std::uint32_t pkgCount = 0;
-                    a_serde->ReadRecordData(&pkgCount, sizeof(pkgCount));
-                    for (std::uint32_t i = 0; i < pkgCount; ++i) {
-                        RE::FormID pkgID = 0;
-                        a_serde->ReadRecordData(&pkgID, sizeof(pkgID));
-                        if (a_serde->ResolveFormID(pkgID, pkgID)) {
-                            auto* pkg = RE::TESForm::LookupByID<RE::TESPackage>(pkgID);
-                            if (pkg) face.packages.push_back(pkg);
-                        }
+                case kDonorFaceDataRecord: {
+                    FaceSnapshot donorFace{};
+                    if (ReadFaceSnapshotRecord(a_serde, donorFace)) {
+                        FaceManager::GetSingleton().SetDonorAppearance(donorFace);
+                        SKSE::log::info("Loaded saved donor face appearance from co-save.");
                     }
-
-                    if (a_serde->ResolveFormID(raceID, raceID)) {
-                        face.race = RE::TESForm::LookupByID<RE::TESRace>(raceID);
-                    }
-                    if (a_serde->ResolveFormID(faceNPCID, faceNPCID)) {
-                        face.faceNPC = RE::TESForm::LookupByID<RE::TESNPC>(faceNPCID);
-                    }
-                    if (a_serde->ResolveFormID(hairColorID, hairColorID)) {
-                        face.hairColor = RE::TESForm::LookupByID<RE::BGSColorForm>(hairColorID);
-                    }
-                    if (a_serde->ResolveFormID(voiceTypeID, voiceTypeID)) {
-                        face.voiceType = RE::TESForm::LookupByID<RE::BGSVoiceType>(voiceTypeID);
-                    }
-                    if (a_serde->ResolveFormID(classID, classID)) {
-                        face.npcClass = RE::TESForm::LookupByID<RE::TESClass>(classID);
-                    }
-                    if (a_serde->ResolveFormID(combatStyleID, combatStyleID)) {
-                        face.combatStyle = RE::TESForm::LookupByID<RE::TESCombatStyle>(combatStyleID);
-                    }
-                    if (a_serde->ResolveFormID(defaultPackListID, defaultPackListID)) {
-                        face.defaultPackList = RE::TESForm::LookupByID<RE::BGSListForm>(defaultPackListID);
-                    }
-
-                    FaceManager::GetSingleton().SetSavedAppearance(face);
-                    SKSE::log::info("Loaded saved player face appearance from co-save.");
                     break;
                 }
 
@@ -401,6 +463,7 @@ namespace AlternateActors::Serialization {
     void RevertCallback(SKSE::SerializationInterface*) {
         AliasManager::GetSingleton().Clear();
         FaceManager::GetSingleton().ClearSavedAppearance();
+        FaceManager::GetSingleton().ClearDonorAppearance();
         InventoryManager::GetSingleton().Clear();
         FactionManager::GetSingleton().Clear();
         StatManager::GetSingleton().Clear();

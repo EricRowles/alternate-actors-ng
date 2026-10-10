@@ -37,8 +37,9 @@ void InitializeLogging() {
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
     if (!a_msg) return;
 
-    if (a_msg->type == SKSE::MessagingInterface::kInputLoaded || a_msg->type == SKSE::MessagingInterface::kDataLoaded) {
+    if (a_msg->type == SKSE::MessagingInterface::kInputLoaded) {
         AlternateActors::IdleAIManager::GetSingleton().Initialize();
+    } else if (a_msg->type == SKSE::MessagingInterface::kDataLoaded) {
         AlternateActors::ImpersonationManager::GetSingleton().Initialize();
     } else if (a_msg->type == SKSE::MessagingInterface::kPostLoadGame) {
         AlternateActors::ImpersonationManager::GetSingleton().OnPostLoadGame();

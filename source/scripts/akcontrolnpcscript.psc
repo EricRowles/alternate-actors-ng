@@ -1,8 +1,5 @@
 Scriptname AKControlNPCScript extends ReferenceAlias  
 
-AKControlMCMScript property akquestMCM auto Hidden
-AKControlQuestScript property akquest auto Hidden
-AKControlQuest2Script property akquest2 auto Hidden
 
 Event OnDeath(Actor akKiller)
 	Actor player = Game.GetPlayer()

@@ -71,8 +71,9 @@ namespace AlternateActors {
 
         if (a_event->menuName == "Dialogue Menu"sv) {
             if (!a_event->opening) {
-                _inSelfDialogue = false;
-                ImpersonationManager::GetSingleton().ResetSpeechTracking();
+                if (!ImpersonationManager::GetSingleton().IsPlayerSpeaking()) {
+                    _inSelfDialogue = false;
+                }
             }
         }
 
@@ -170,6 +171,10 @@ namespace AlternateActors {
             return false;
         }
 
+        if (_aiActive) {
+            StopIdleAI();
+        }
+
         // Enable dialogue permissions on both
         a_speaker->AllowPCDialogue(true);
         a_speaker->AllowBleedoutDialogue(true);
@@ -185,32 +190,49 @@ namespace AlternateActors {
                 static_cast<std::uint32_t>(a_speaker->GetFormID()), (a_speaker == puppet));
             return true;
         } else {
-            _inSelfDialogue = false;
-            SKSE::log::warn("SetDialogueWithPlayer returned false for actor {:08X}",
+            SKSE::log::warn("SetDialogueWithPlayer returned false for actor {:08X}, attempting force-greet fallback",
                 static_cast<std::uint32_t>(a_speaker->GetFormID()));
-            return TriggerVoiceLine(a_speaker);
+            bool greeted = a_speaker->SetDialogueWithPlayer(true, true, nullptr);
+            if (!greeted) {
+                _inSelfDialogue = false;
+            }
+            return greeted;
         }
     }
 
     bool IdleAIManager::IsInSelfDialogue() const {
-        if (_inSelfDialogue) return true;
-        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
-        if (topicMgr) {
-            auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
-            if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
-                auto* ui = RE::UI::GetSingleton();
-                if (ui && ui->IsMenuOpen("Dialogue Menu"sv)) {
-                    return true;
-                }
+        auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+        if (!puppet) return false;
+
+        auto* ui = RE::UI::GetSingleton();
+        bool dialogueMenuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
+
+        if (dialogueMenuOpen) {
+            auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+            if (topicMgr && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
+                return true;
+            }
+            if (_inSelfDialogue) {
+                return true;
             }
         }
+
+        if (_inSelfDialogue) {
+            auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+            if (topicMgr && topicMgr->speaker == puppet->GetHandle()) {
+                return true;
+            }
+            if (ImpersonationManager::GetSingleton().IsPlayerSpeaking()) {
+                return true;
+            }
+        }
+
         return false;
     }
 
     bool IdleAIManager::TriggerVoiceLine(RE::Actor* a_speaker) {
         if (!a_speaker) {
-            auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
-            a_speaker = puppet ? puppet : RE::PlayerCharacter::GetSingleton();
+            a_speaker = RE::PlayerCharacter::GetSingleton();
         }
         if (!a_speaker) return false;
 

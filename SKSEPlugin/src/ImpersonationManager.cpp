@@ -5,6 +5,7 @@
 #include "Serialization.h"
 #include "IdleAIManager.h"
 
+#include <unordered_set>
 #include <RE/C/CommandTable.h>
 #include <RE/T/TESCondition.h>
 #include <RE/T/TESPackage.h>
@@ -103,89 +104,6 @@ namespace AlternateActors {
         return ok;
     }
 
-    // --- Category B: Spatial Thunk ---
-    enum class SpatialMode {
-        kThisOnly,
-        kThisAndP1,
-        kThisAndP1AndP2
-    };
-
-    template <std::uint16_t ID, SpatialMode Mode>
-    static bool SpatialThunk(RE::TESObjectREFR* a_thisObj, void* a_p1, void* a_p2, double& a_result) {
-        auto& mgr = ImpersonationManager::GetSingleton();
-        auto* orig = s_originalConditions[ID];
-        if (!mgr.IsConditionsEnabled()) {
-            return orig ? orig(a_thisObj, a_p1, a_p2, a_result) : false;
-        }
-
-        auto* player = mgr.GetPlayer();
-        auto* donor = mgr.GetDonor();
-        if (!player || !donor) {
-            return orig ? orig(a_thisObj, a_p1, a_p2, a_result) : false;
-        }
-
-        RE::TESObjectREFR* effectiveThis = a_thisObj;
-        if (effectiveThis == donor) {
-            effectiveThis = player;
-        }
-
-        void* effectiveP1 = a_p1;
-        void* effectiveP2 = a_p2;
-
-        if constexpr (Mode == SpatialMode::kThisAndP1 || Mode == SpatialMode::kThisAndP1AndP2) {
-            if (effectiveP1 == donor) {
-                effectiveP1 = player;
-            }
-        }
-
-        if constexpr (Mode == SpatialMode::kThisAndP1AndP2) {
-            if (effectiveP2 == donor) {
-                effectiveP2 = player;
-            }
-        }
-
-        return orig ? orig(effectiveThis, effectiveP1, effectiveP2, a_result) : false;
-    }
-
-    // --- Category C: Relationship Thunk ---
-    template <std::uint16_t ID>
-    static bool RelationshipThunk(RE::TESObjectREFR* a_thisObj, void* a_p1, void* a_p2, double& a_result) {
-        auto& mgr = ImpersonationManager::GetSingleton();
-        auto* orig = s_originalConditions[ID];
-        if (!mgr.IsConditionsEnabled()) {
-            return orig ? orig(a_thisObj, a_p1, a_p2, a_result) : false;
-        }
-
-        auto* player = mgr.GetPlayer();
-        auto* donor = mgr.GetDonor();
-        auto* puppet = mgr.GetPuppet();
-        if (!player || !donor) {
-            return orig ? orig(a_thisObj, a_p1, a_p2, a_result) : false;
-        }
-
-        RE::TESObjectREFR* effectiveThis = a_thisObj;
-        void* effectiveP1 = a_p1;
-
-        bool isSelfDialogue = IdleAIManager::GetSingleton().IsInSelfDialogue();
-
-        // Skip substitution if it would make effectiveThis == effectiveP1
-        bool willBeSame = (effectiveThis == player && effectiveP1 == donor) ||
-                          (effectiveThis == donor && effectiveP1 == player) ||
-                          (effectiveThis == puppet && effectiveP1 == donor && isSelfDialogue) ||
-                          (effectiveThis == donor && effectiveP1 == puppet && isSelfDialogue);
-
-        if (!willBeSame) {
-            if (effectiveThis == player || (puppet && effectiveThis == puppet && isSelfDialogue)) {
-                effectiveThis = donor;
-            }
-            if (effectiveP1 == player || (puppet && effectiveP1 == puppet && isSelfDialogue)) {
-                effectiveP1 = donor;
-            }
-        }
-
-        return orig ? orig(effectiveThis, effectiveP1, a_p2, a_result) : false;
-    }
-
     RE::BGSVoiceType* ImpersonationManager::GetNPCVoiceType(const RE::TESNPC* a_npc) {
         if (!a_npc) return nullptr;
         // 1. Direct member variable access (avoids any vtable dispatch mismatch)
@@ -207,11 +125,7 @@ namespace AlternateActors {
             auto& mgr = ImpersonationManager::GetSingleton();
             if (mgr.IsActive() && mgr._donorVoiceType) {
                 auto* player = RE::PlayerCharacter::GetSingleton();
-                auto* puppet = mgr.GetPuppet();
                 if (player && a_this == player->GetActorBase()) {
-                    return mgr._donorVoiceType;
-                }
-                if (puppet && a_this == puppet->GetActorBase() && IdleAIManager::GetSingleton().IsInSelfDialogue()) {
                     return mgr._donorVoiceType;
                 }
                 if (a_this->voiceType) {
@@ -230,7 +144,7 @@ namespace AlternateActors {
         if (a_response && !a_response->text.empty()) {
             textLen = static_cast<float>(a_response->text.length());
         }
-        _speechMinDuration = std::max(2.0f, textLen * 0.08f);
+        _speechMinDuration = std::max(2.0f, textLen * 0.065f);
     }
 
     void ImpersonationManager::ResetSpeechTracking() {
@@ -249,6 +163,10 @@ namespace AlternateActors {
     }
 
     bool ImpersonationManager::CheckPlayerSpeakingDone() {
+        if (!_playerSpeaking.load(std::memory_order_relaxed)) {
+            return true;
+        }
+
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return true;
 
@@ -267,7 +185,6 @@ namespace AlternateActors {
                         elapsed = 0.0f;
                     }
                     _speechHadSound.store(true, std::memory_order_relaxed);
-                    _playerSpeaking.store(true, std::memory_order_relaxed);
                     break;
                 }
             }
@@ -288,7 +205,7 @@ namespace AlternateActors {
             if (auto* puppet = GetPuppet()) {
                 puppet->SetSpeakingDone(true);
             }
-            SKSE::log::info("Player dialogue/scene speech completed (audio finished after {:.2f}s)", elapsed);
+            SKSE::log::info("Player dialogue speech completed (audio finished after {:.2f}s)", elapsed);
             auto* ui = RE::UI::GetSingleton();
             if (ui && !ui->IsMenuOpen("Dialogue Menu"sv)) {
                 IdleAIManager::GetSingleton().SetInSelfDialogue(false);
@@ -296,27 +213,65 @@ namespace AlternateActors {
             return true;
         }
 
-        // If _playerSpeaking was set (e.g. from UpdateInDialogue for unvoiced lines)
-        if (_playerSpeaking.load(std::memory_order_relaxed)) {
-            if (elapsed < _speechMinDuration) {
-                return false;
-            }
-
-            _playerSpeaking.store(false, std::memory_order_relaxed);
-            _speechHadSound.store(false, std::memory_order_relaxed);
-            player->SetSpeakingDone(true);
-            if (auto* puppet = GetPuppet()) {
-                puppet->SetSpeakingDone(true);
-            }
-            SKSE::log::info("Player dialogue speech completed (timer elapsed after {:.2f}s)", elapsed);
-            auto* ui = RE::UI::GetSingleton();
-            if (ui && !ui->IsMenuOpen("Dialogue Menu"sv)) {
-                IdleAIManager::GetSingleton().SetInSelfDialogue(false);
-            }
-            return true;
+        // If no sound was played (e.g. unvoiced line / text-only dialogue)
+        if (elapsed < _speechMinDuration) {
+            return false;
         }
 
+        _playerSpeaking.store(false, std::memory_order_relaxed);
+        _speechHadSound.store(false, std::memory_order_relaxed);
+        player->SetSpeakingDone(true);
+        if (auto* puppet = GetPuppet()) {
+            puppet->SetSpeakingDone(true);
+        }
+        SKSE::log::info("Player dialogue speech completed (timer elapsed after {:.2f}s)", elapsed);
+        auto* ui = RE::UI::GetSingleton();
+        if (ui && !ui->IsMenuOpen("Dialogue Menu"sv)) {
+            IdleAIManager::GetSingleton().SetInSelfDialogue(false);
+        }
         return true;
+    }
+
+    void ImpersonationManager::SyncDonorUpdatesToPlayer() {
+        if (!_active.load(std::memory_order_relaxed)) return;
+        auto* donor = GetDonor();
+        auto* player = GetPlayer();
+        if (!donor || !player) return;
+
+        // 1. Sync any updated aliases
+        if (_options.aliases) {
+            AliasManager::GetSingleton().SwapAliasesToPlayer(donor, player);
+        }
+
+        // 2. Sync AI packages from donor to player base
+        if (_options.packages) {
+            auto* donorBase = donor->GetActorBase();
+            auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
+            if (donorBase && playerBase) {
+                std::vector<RE::TESPackage*> donorPkgs;
+                for (auto* pkg : donorBase->aiPackages.packages) {
+                    if (pkg) {
+                        donorPkgs.push_back(pkg);
+                    }
+                }
+
+                std::vector<RE::TESPackage*> playerPkgs;
+                for (auto* pkg : playerBase->aiPackages.packages) {
+                    if (pkg) {
+                        playerPkgs.push_back(pkg);
+                    }
+                }
+
+                if (donorPkgs != playerPkgs) {
+                    playerBase->aiPackages.packages.clear();
+                    for (auto it = donorPkgs.rbegin(); it != donorPkgs.rend(); ++it) {
+                        playerBase->aiPackages.packages.push_front(*it);
+                    }
+                    player->EvaluatePackage(false, false);
+                    SKSE::log::info("Synchronized updated donor AI packages to player.");
+                }
+            }
+        }
     }
 
     bool ImpersonationManager::Hook_Character_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused) {
@@ -324,73 +279,81 @@ namespace AlternateActors {
             auto& mgr = ImpersonationManager::GetSingleton();
             if (mgr.IsActive()) {
                 auto* puppet = mgr.GetPuppet();
-                auto* player = mgr.GetPlayer();
-                if (puppet && a_this == puppet && player) {
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                if (puppet && player && a_this == puppet) {
                     if (a_response != nullptr) {
-                        SKSE::log::info("Processing self-dialogue response: text='{}', voice='{}', sound={:08X}, emotion={}, percent={}",
-                            a_response->text.c_str(),
-                            a_response->voice.c_str(),
-                            a_response->voiceSound ? static_cast<std::uint32_t>(a_response->voiceSound->GetFormID()) : 0,
-                            static_cast<std::uint32_t>(a_response->animFaceArchType.get()),
-                            a_response->percent);
+                        bool inSelf = IdleAIManager::GetSingleton().IsInSelfDialogue();
+                        auto* ui = RE::UI::GetSingleton();
+                        bool menuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
+                        if (inSelf || menuOpen) {
+                            SKSE::log::info("Redirecting puppet dialogue to player: text='{}', voice='{}', sound={:08X}",
+                                a_response->text.c_str(),
+                                a_response->voice.c_str(),
+                                a_response->voiceSound ? static_cast<std::uint32_t>(a_response->voiceSound->GetFormID()) : 0);
 
-                        // Save original response fields
-                        auto origVoice = a_response->voice;
-                        auto* origVoiceSound = a_response->voiceSound;
-                        bool origSoundLip = a_response->soundLip;
-                        bool origUseEmotion = a_response->useEmotion;
-                        auto* origSpeakerIdle = a_response->speakerIdle;
+                            // Save original response fields
+                            auto origVoice = a_response->voice;
+                            auto* origVoiceSound = a_response->voiceSound;
+                            bool origSoundLip = a_response->soundLip;
+                            bool origUseEmotion = a_response->useEmotion;
+                            auto* origSpeakerIdle = a_response->speakerIdle;
 
-                        // Temporarily strip from response so puppet does NOT play voice, lip, emotion, or idle
-                        a_response->voice = ""sv;
-                        a_response->voiceSound = nullptr;
-                        a_response->soundLip = false;
-                        a_response->useEmotion = false;
-                        a_response->speakerIdle = nullptr;
+                            // Temporarily strip from response so puppet does NOT play voice, lip, emotion, or idle
+                            a_response->voice = ""sv;
+                            a_response->voiceSound = nullptr;
+                            a_response->soundLip = false;
+                            a_response->useEmotion = false;
+                            a_response->speakerIdle = nullptr;
 
-                        // 1. Advance puppet natively in engine so MenuTopicManager selects topic and runs result scripts
-                        bool nativeRet = _origCharUpdateInDialogue(puppet, a_response, a_unused);
+                            // 1. Advance puppet natively in engine so MenuTopicManager selects topic and runs result scripts
+                            bool nativeRet = _origCharUpdateInDialogue(puppet, a_response, a_unused);
 
-                        // Suppress puppet face, mouth, and audio
-                        if (auto* faceData = puppet->GetFaceGenAnimationData()) {
-                            faceData->Reset(0.0f, true, true, true, false);
-                            faceData->ClearExpressionOverride();
-                        }
-                        puppet->SetEmotionType(RE::EmotionType::kNeutral);
-                        puppet->SetEmotionValue(0);
+                            // Suppress puppet face, mouth, and audio
+                            if (auto* faceData = puppet->GetFaceGenAnimationData()) {
+                                faceData->Reset(0.0f, true, true, true, false);
+                                faceData->ClearExpressionOverride();
+                            }
+                            puppet->SetEmotionType(RE::EmotionType::kNeutral);
+                            puppet->SetEmotionValue(0);
 
-                        auto* puppetProcess = puppet->GetActorRuntimeData().currentProcess;
-                        if (puppetProcess && puppetProcess->high) {
-                            for (auto& handle : puppetProcess->high->soundHandles) {
-                                if (handle.IsValid()) {
-                                    handle.SetVolume(0.0f);
-                                    handle.Stop();
+                            auto* puppetProcess = puppet->GetActorRuntimeData().currentProcess;
+                            if (puppetProcess && puppetProcess->high) {
+                                for (auto& handle : puppetProcess->high->soundHandles) {
+                                    if (handle.IsValid()) {
+                                        handle.SetVolume(0.0f);
+                                        handle.Stop();
+                                    }
                                 }
                             }
+
+                            // Restore original fields on response for player
+                            a_response->voice = origVoice;
+                            a_response->voiceSound = origVoiceSound;
+                            a_response->soundLip = origSoundLip;
+                            a_response->useEmotion = origUseEmotion;
+                            a_response->speakerIdle = origSpeakerIdle;
+
+                            // 2. Apply facial emotion and expression directly to player
+                            if (a_response->useEmotion) {
+                                player->SetEmotionType(a_response->animFaceArchType.get());
+                                player->SetEmotionValue(a_response->percent);
+                            }
+
+                            // 3. Play line on player and track speech
+                            mgr.OnDialogueResponseStarted(a_response);
+                            _origPlayerUpdateInDialogue(player, a_response, a_unused);
+
+                            // 4. Sync any donor updates (packages/aliases) to player
+                            mgr.SyncDonorUpdatesToPlayer();
+
+                            return nativeRet;
+                        } else {
+                            // Suppress puppet spontaneous idle speech outside self-dialogue
+                            SKSE::log::info("Suppressing puppet spontaneous idle speech: '{}'", a_response->text.c_str());
+                            return false;
                         }
-
-                        // Restore original fields on response for player
-                        a_response->voice = origVoice;
-                        a_response->voiceSound = origVoiceSound;
-                        a_response->soundLip = origSoundLip;
-                        a_response->useEmotion = origUseEmotion;
-                        a_response->speakerIdle = origSpeakerIdle;
-
-                        // 2. Apply facial emotion and expression directly to player
-                        if (a_response->useEmotion) {
-                            player->SetEmotionType(a_response->animFaceArchType.get());
-                            player->SetEmotionValue(a_response->percent);
-                        }
-
-                        // 3. Play line on player and track speech
-                        mgr.OnDialogueResponseStarted(a_response);
-                        bool playerSpoken = player->UpdateInDialogue(a_response, a_unused);
-                        SKSE::log::info("player->UpdateInDialogue started: {}, nativeRet: {}", playerSpoken, nativeRet);
-
-                        return nativeRet;
                     } else {
                         // Ticks with a_response == nullptr:
-                        // Keep temp NPC face completely still and neutral
                         if (auto* faceData = puppet->GetFaceGenAnimationData()) {
                             faceData->ClearExpressionOverride();
                         }
@@ -409,7 +372,7 @@ namespace AlternateActors {
                         _origCharUpdateInDialogue(puppet, nullptr, a_unused);
 
                         // Always tick player so lip-sync phonemes, mouth movement, and speech advance
-                        player->UpdateInDialogue(nullptr, a_unused);
+                        _origPlayerUpdateInDialogue(player, nullptr, a_unused);
                         return true;
                     }
                 }
@@ -419,15 +382,13 @@ namespace AlternateActors {
     }
 
     bool ImpersonationManager::Hook_Player_UpdateInDialogue(RE::Actor* a_this, RE::DialogueResponse* a_response, bool a_unused) {
-        if (a_this) {
+        if (a_this && a_response != nullptr) {
+            SKSE::log::info("Player {:08X} speaking dialogue line: '{}'",
+                static_cast<std::uint32_t>(a_this->GetFormID()),
+                a_response->text.c_str());
             auto& mgr = ImpersonationManager::GetSingleton();
             if (mgr.IsActive()) {
-                if (a_response != nullptr) {
-                    SKSE::log::info("Player {:08X} speaking dialogue line: '{}'",
-                        static_cast<std::uint32_t>(a_this->GetFormID()),
-                        a_response->text.c_str());
-                    mgr.OnDialogueResponseStarted(a_response);
-                }
+                mgr.OnDialogueResponseStarted(a_response);
             }
         }
         return _origPlayerUpdateInDialogue(a_this, a_response, a_unused);
@@ -439,13 +400,7 @@ namespace AlternateActors {
             if (mgr.IsActive()) {
                 auto* puppet = mgr.GetPuppet();
                 if (puppet && a_this == puppet) {
-                    if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
-                        // In self-dialogue, check if the player has finished speaking
-                        return mgr.CheckPlayerSpeakingDone();
-                    }
-                    bool charDone = _origCharQSpeakingDone(puppet);
-                    bool playerDone = mgr.CheckPlayerSpeakingDone();
-                    return charDone && playerDone;
+                    return mgr.CheckPlayerSpeakingDone();
                 }
             }
         }
@@ -455,7 +410,7 @@ namespace AlternateActors {
     bool ImpersonationManager::Hook_Player_QSpeakingDone(const RE::Actor* a_this) {
         if (a_this) {
             auto& mgr = ImpersonationManager::GetSingleton();
-            if (mgr.IsActive()) {
+            if (mgr.IsActive() && mgr.IsPlayerSpeaking()) {
                 return mgr.CheckPlayerSpeakingDone();
             }
         }
@@ -468,11 +423,8 @@ namespace AlternateActors {
             if (mgr.IsActive()) {
                 auto* puppet = mgr.GetPuppet();
                 if (puppet && a_this == puppet) {
-                    if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
-                        // In self-dialogue, the player (player) is the speaker.
-                        // Do not let the temp NPC's native state override the player's speech tracking!
-                        _origCharSetSpeakingDone(a_this, a_set);
-                        return;
+                    if (a_set) {
+                        mgr.ResetSpeechTracking();
                     }
                 }
             }
@@ -481,10 +433,13 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::Hook_Player_SetSpeakingDone(RE::Actor* a_this, bool a_set) {
-        if (a_set) {
+        if (a_this) {
             auto& mgr = ImpersonationManager::GetSingleton();
-            mgr._playerSpeaking.store(false, std::memory_order_relaxed);
-            mgr._speechHadSound.store(false, std::memory_order_relaxed);
+            if (mgr.IsActive()) {
+                if (a_set) {
+                    mgr.ResetSpeechTracking();
+                }
+            }
         }
         _origPlayerSetSpeakingDone(a_this, a_set);
     }
@@ -554,31 +509,8 @@ namespace AlternateActors {
         hook(426, IdentityThunk<426>);  // GetIsVoiceType
         hook(566, IdentityThunk<566>);  // GetIsAliasRef
 
-        // Category B - Spatial
-        hook(1, SpatialThunk<1, SpatialMode::kThisAndP1>);      // GetDistance
-        hook(27, SpatialThunk<27, SpatialMode::kThisAndP1>);    // GetLineOfSight
-        hook(32, SpatialThunk<32, SpatialMode::kThisAndP1>);    // GetInSameCell
-        hook(45, SpatialThunk<45, SpatialMode::kThisAndP1>);    // GetDetected
-        hook(99, SpatialThunk<99, SpatialMode::kThisAndP1>);    // GetHeadingAngle
-        hook(584, SpatialThunk<584, SpatialMode::kThisAndP1>);  // GetRelativeAngle
-        hook(639, SpatialThunk<639, SpatialMode::kThisAndP1>);  // GetWithinDistance
-        hook(705, SpatialThunk<705, SpatialMode::kThisAndP1>);  // GetShouldHelp
-        hook(719, SpatialThunk<719, SpatialMode::kThisAndP1>);  // IsHostileToActor
-
-        hook(577, SpatialThunk<577, SpatialMode::kThisAndP1AndP2>); // IsCloserToAThanB
-
-        // Category C - Relationship
-        hook(258, RelationshipThunk<258>);  // HasAssociationType
-        hook(259, RelationshipThunk<259>);  // HasFamilyRelationship
-        hook(261, RelationshipThunk<261>);  // HasParentRelationship
-        hook(403, RelationshipThunk<403>);  // GetRelationshipRank
-        hook(615, RelationshipThunk<615>);  // GetHighestRelationshipRank
-        hook(616, RelationshipThunk<616>);  // GetLowestRelationshipRank
-        hook(617, RelationshipThunk<617>);  // HasAssociationTypeAny
-        hook(618, RelationshipThunk<618>);  // HasFamilyRelationshipAny
-
         _hooksInstalled = true;
-        SKSE::log::info("Installed 20 Impersonation condition function hooks and GetObjectVoiceType vfunc hook successfully.");
+        SKSE::log::info("Installed 6 Impersonation identity condition function hooks and dialogue vfunc hooks successfully.");
     }
 
     void ImpersonationManager::Initialize() {
@@ -715,10 +647,23 @@ namespace AlternateActors {
                 if (followerFaction) {
                     oldPuppet->AddToFaction(followerFaction, -1);
                 }
+                auto* playerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x00000DB1); // PlayerFaction
+                if (playerFaction) {
+                    oldPuppet->AddToFaction(playerFaction, -1);
+                }
                 if (auto* base = skyrim_cast<RE::TESNPC*>(oldPuppet->GetActorBase())) {
                     auto* followPkg = RE::TESForm::LookupByID<RE::TESPackage>(0x0004B037); // DefaultFollowPlayer
-                    if (followPkg && !base->aiPackages.packages.empty() && base->aiPackages.packages.front() == followPkg) {
-                        base->aiPackages.packages.pop_front();
+                    if (followPkg && !base->aiPackages.packages.empty()) {
+                        std::vector<RE::TESPackage*> remaining;
+                        for (auto* pkg : base->aiPackages.packages) {
+                            if (pkg && pkg != followPkg) {
+                                remaining.push_back(pkg);
+                            }
+                        }
+                        base->aiPackages.packages.clear();
+                        for (auto it = remaining.rbegin(); it != remaining.rend(); ++it) {
+                            base->aiPackages.packages.push_front(*it);
+                        }
                     }
                 }
                 oldPuppet->EvaluatePackage(false, false);
@@ -730,6 +675,16 @@ namespace AlternateActors {
         }
 
         _puppetHandle = a_puppet->GetHandle();
+
+        // Ensure puppet actor base never has faceNPC template attached
+        if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
+            base->faceNPC = nullptr;
+        }
+
+        // Restore original Dragonborn appearance onto puppet if saved appearance exists
+        if (FaceManager::GetSingleton().HasSavedAppearance()) {
+            FaceManager::GetSingleton().RestoreOriginalPuppetAppearance(a_puppet);
+        }
 
         // 1. Set PlayerTeammate flag so puppet follows player, draws weapons, and assists in combat
         a_puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
@@ -761,13 +716,6 @@ namespace AlternateActors {
         auto* playerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x00000DB1);
         if (playerFaction) {
             a_puppet->AddToFaction(playerFaction, 0);
-        }
-
-        // 4. Set puppet display name to original player name
-        if (!_origPlayerName.empty()) {
-            if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
-                base->fullName = _origPlayerName;
-            }
         }
 
         // 5. Clear combat, allow dialogue, and evaluate package immediately
@@ -905,12 +853,6 @@ namespace AlternateActors {
                             if (locData && locData->pointer) {
                                 CheckAndRetargetLocation(pkg, locData->pointer, a_donor, a_player, PackageRetargetType::kCustomLocHandle, PackageRetargetType::kCustomLocObject);
                             }
-                        } else if (vtbl == RE::VTABLE_BGSPackageDataTargetSelector[0].address() ||
-                                   vtbl == RE::VTABLE_BGSPackageDataRef[0].address()) {
-                            auto* targ = *reinterpret_cast<RE::PackageTarget**>(reinterpret_cast<char*>(entry) + 0x10);
-                            if (targ) {
-                                CheckAndRetargetTarget(pkg, targ, a_donor, a_player, PackageRetargetType::kCustomTargHandle, PackageRetargetType::kCustomTargObject);
-                            }
                         }
                     }
                 }
@@ -970,7 +912,6 @@ namespace AlternateActors {
         };
         return startsWithNoCase(name, "akc") ||
                startsWithNoCase(name, "akcontrol") ||
-               startsWithNoCase(name, "ak__qf_akcontrolquest") ||
                startsWithNoCase(name, "ak_ng");
     }
 
@@ -1101,6 +1042,11 @@ namespace AlternateActors {
             donorID = _donorActor.load()->GetFormID();
         }
 
+        RE::FormID puppetID = 0;
+        if (auto* puppet = GetPuppet()) {
+            puppetID = puppet->GetFormID();
+        }
+
         std::uint32_t optMask = 0;
         if (_options.conditions) optMask |= (1 << 0);
         if (_options.aliases) optMask |= (1 << 1);
@@ -1110,6 +1056,7 @@ namespace AlternateActors {
         if (a_serde->OpenRecord(Serialization::kImpersonationDataRecord, Serialization::kSerializationVersion)) {
             a_serde->WriteRecordData(&active, sizeof(active));
             a_serde->WriteRecordData(&donorID, sizeof(donorID));
+            a_serde->WriteRecordData(&puppetID, sizeof(puppetID));
             a_serde->WriteRecordData(&optMask, sizeof(optMask));
 
             std::uint32_t redirectCount = static_cast<std::uint32_t>(_papyrusRedirects.size());
@@ -1124,11 +1071,12 @@ namespace AlternateActors {
         }
     }
 
-    void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t /*a_version*/, std::uint32_t a_length) {
+    void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t a_version, std::uint32_t a_length) {
         if (!a_serde) return;
 
         bool active = false;
         RE::FormID donorID = 0;
+        RE::FormID puppetID = 0;
         std::uint32_t optMask = 0;
 
         if (a_length < (sizeof(active) + sizeof(donorID) + sizeof(optMask))) {
@@ -1137,6 +1085,11 @@ namespace AlternateActors {
 
         a_serde->ReadRecordData(&active, sizeof(active));
         a_serde->ReadRecordData(&donorID, sizeof(donorID));
+
+        if (a_version >= 2 || a_length >= (sizeof(active) + sizeof(donorID) + sizeof(puppetID) + sizeof(optMask))) {
+            a_serde->ReadRecordData(&puppetID, sizeof(puppetID));
+        }
+
         a_serde->ReadRecordData(&optMask, sizeof(optMask));
 
         _options.conditions = (optMask & (1 << 0)) != 0;
@@ -1146,6 +1099,15 @@ namespace AlternateActors {
 
         if (a_serde->ResolveFormID(donorID, donorID)) {
             _savedDonorFormID = donorID;
+        }
+
+        if (puppetID != 0) {
+            if (a_serde->ResolveFormID(puppetID, puppetID)) {
+                if (auto* puppet = RE::TESForm::LookupByID<RE::Actor>(puppetID)) {
+                    _puppetHandle = puppet->GetHandle();
+                    SKSE::log::info("Restored puppet {:08X} from co-save.", static_cast<std::uint32_t>(puppetID));
+                }
+            }
         }
 
         std::uint32_t redirectCount = 0;
@@ -1204,6 +1166,7 @@ namespace AlternateActors {
         _donorName.clear();
         _origPlayerName.clear();
         SetPuppet(nullptr);
+        FaceManager::GetSingleton().ClearDonorAppearance();
     }
 
     void ImpersonationManager::OnPostLoadGame() {
@@ -1212,6 +1175,38 @@ namespace AlternateActors {
             auto* player = _playerActor.load(std::memory_order_relaxed);
             if (donor && player && _options.packages) {
                 RetargetPackages(donor, player);
+            }
+            if (donor) {
+                if (auto* base = donor->GetActorBase()) {
+                    _donorVoiceType = GetNPCVoiceType(base);
+                    SKSE::log::info("OnPostLoadGame: verified donor voice type {:08X}",
+                        _donorVoiceType ? static_cast<std::uint32_t>(_donorVoiceType->GetFormID()) : 0);
+                }
+            }
+            if (donor && player) {
+                SKSE::log::info("OnPostLoadGame: Re-applying donor appearance (donor: {:08X}, player: {:08X})",
+                    static_cast<std::uint32_t>(donor->GetFormID()),
+                    static_cast<std::uint32_t>(player->GetFormID()));
+
+                FaceManager::GetSingleton().RestoreDonorAppearance(donor, player);
+
+                auto* task = SKSE::GetTaskInterface();
+                if (task) {
+                    task->AddTask([donor, player]() {
+                        if (donor && player) {
+                            FaceManager::GetSingleton().RestoreDonorAppearance(donor, player);
+                        }
+                    });
+                }
+            }
+
+            if (auto* puppet = GetPuppet()) {
+                if (auto* base = skyrim_cast<RE::TESNPC*>(puppet->GetActorBase())) {
+                    base->faceNPC = nullptr;
+                }
+                if (FaceManager::GetSingleton().HasSavedAppearance()) {
+                    FaceManager::GetSingleton().RestoreOriginalPuppetAppearance(puppet);
+                }
             }
         }
     }

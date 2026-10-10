@@ -31,6 +31,10 @@ namespace AlternateActors {
         RE::NiColor hairTintColor{ 0.0f, 0.0f, 0.0f };
         bool hasHairTintColor{ false };
 
+        // 3D Rendered Skin Tint Color
+        RE::NiColor skinTintColor{ 0.0f, 0.0f, 0.0f };
+        bool hasSkinTintColor{ false };
+
         // AI Behavior & Combat Data
         RE::TESClass* npcClass{ nullptr };
         RE::TESCombatStyle* combatStyle{ nullptr };
@@ -55,6 +59,12 @@ namespace AlternateActors {
         // Restores saved original appearance onto target actor
         bool RevertAppearance(RE::Actor* a_target);
 
+        // Restores active donor appearance onto target actor (using saved donor snapshot if available, or donor actor fallback)
+        bool RestoreDonorAppearance(RE::Actor* a_donor, RE::Actor* a_target);
+
+        // Restores saved original Dragonborn appearance onto puppet actor
+        bool RestoreOriginalPuppetAppearance(RE::Actor* a_puppet);
+
         // Snapshot utilities
         bool CaptureSnapshot(RE::Actor* a_actor, FaceSnapshot& a_outSnapshot);
         bool ApplySnapshot(RE::Actor* a_targetActor, const FaceSnapshot& a_snapshot);
@@ -65,6 +75,11 @@ namespace AlternateActors {
         void SetSavedAppearance(const FaceSnapshot& a_snapshot) { _savedOriginalAppearance = a_snapshot; _hasSavedAppearance = true; }
         void ClearSavedAppearance() { _hasSavedAppearance = false; }
 
+        bool HasDonorAppearance() const { return _hasDonorAppearance; }
+        const FaceSnapshot& GetDonorAppearance() const { return _donorAppearance; }
+        void SetDonorAppearance(const FaceSnapshot& a_snapshot) { _donorAppearance = a_snapshot; _hasDonorAppearance = true; }
+        void ClearDonorAppearance() { _hasDonorAppearance = false; }
+
     private:
         FaceManager() = default;
         ~FaceManager() = default;
@@ -73,6 +88,8 @@ namespace AlternateActors {
 
         FaceSnapshot _savedOriginalAppearance;
         bool _hasSavedAppearance{ false };
+        FaceSnapshot _donorAppearance;
+        bool _hasDonorAppearance{ false };
     };
 
 }

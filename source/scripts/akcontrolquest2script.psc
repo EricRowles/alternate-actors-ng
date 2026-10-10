@@ -32,5 +32,11 @@ function akmaintenance()
 
 	If akquest.MainChar == False
 		AK_NG.SetControllingNPC(True)
+		If akquest.akcontroltemp
+			AK_NG.SetPuppetActor(akquest.akcontroltemp)
+		EndIf
+		If akquest.origionalnpc
+			AK_NG.CopyAppearance(akquest.origionalnpc, playerref)
+		EndIf
 	EndIf
 EndFunction
