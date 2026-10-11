@@ -77,17 +77,10 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 	EndIf
 	
 	; Make the player look and have stats like the donor NPC
-	AK_NG.CloneAppearance(akdonor, playerref)
-	AK_NG.TransferStats(akdonor, playerref)
-
-	; Native Faction Transfer
-	AK_NG.TransferFactions(akdonor, playerref)
-
-	; Native Inventory Transfer
 	If MainChar == True
-		AK_NG.TransferInventoryToPlayer(playerref, akdonor, akcontroltemp)
+		AK_NG.ApplyDonorProfile(akdonor, playerref, akcontroltemp)
 	Else
-		AK_NG.TransferInventoryToPlayer(playerref, akdonor, None)
+		AK_NG.ApplyDonorProfile(akdonor, playerref, None)
 	EndIf
 
 	origionalnpc.moveto(AKControlCloneMarker)
@@ -106,7 +99,6 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 	MainChar = False
 	AK_NG.SetControllingNPC(True)
 	AK_NG.BeginImpersonation(akdonor, playerref)
-	RegisterForSingleUpdate(1.0)
 
 	Debug.Notification("Control Swapped")
 EndFunction
@@ -116,7 +108,6 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 	if MainChar == False
 		AK_NG.SetControllingNPC(False)
 		AK_NG.EndImpersonation()
-		UnregisterForUpdate()
 		
 		Game.FadeOutGame(true, true, 0.0, 0.3)
 		
@@ -131,11 +122,7 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 		EndIf
 		akimposter.RemoveSpell(akcontrolrevertspell)
 		
-		AK_NG.CopyStats(playerref, origionalnpc)
-		AK_NG.RevertAppearance(playerref)
-		AK_NG.RestoreStats(playerref)
-		AK_NG.RestoreInventoryFromPlayer(playerref, origionalnpc, akcontroltemp)
-		AK_NG.RestoreFactions(playerref)
+		AK_NG.RestorePlayerProfile(playerref, origionalnpc, akcontroltemp)
 		
 		ReferenceAlias controlTempAlias = GetControlTempAlias()
 		If controlTempAlias
@@ -159,9 +146,3 @@ function akrevert(actor akimposter, Bool AKDrainmagic = False)
 	EndIf
 EndFunction
 
-Event OnUpdate()
-	If MainChar == False
-		AK_NG.UpdateIdleAI()
-		RegisterForSingleUpdate(1.0)
-	EndIf
-EndEvent

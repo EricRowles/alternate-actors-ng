@@ -83,6 +83,11 @@ namespace AlternateActors {
         bool CheckPlayerSpeakingDone();
         void OnDialogueResponseStarted(RE::DialogueResponse* a_response);
         bool IsPlayerSpeaking() const { return _playerSpeaking.load(std::memory_order_relaxed); }
+        void SetPlayerSpeaking(bool a_speaking) { _playerSpeaking.store(a_speaking, std::memory_order_relaxed); }
+        void CompleteSpeaking(RE::Actor* a_player);
+        bool IsInCompleteSpeaking() const { return _inCompleteSpeaking.load(std::memory_order_relaxed); }
+        static void AttachSoundHandlesToHead(RE::Actor* a_actor);
+        bool RedirectDialogueToPlayer(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused);
         void SyncDonorUpdatesToPlayer();
 
     private:
@@ -120,6 +125,24 @@ namespace AlternateActors {
         using SetDialogueWithPlayer_t = bool(RE::Actor*, bool, bool, RE::TESTopicInfo*);
         inline static REL::Relocation<SetDialogueWithPlayer_t> _origSetDialogueWithPlayer;
 
+        static void Hook_Player_UpdateAnimation(RE::Actor* a_this, float a_delta);
+        using UpdateAnimation_t = void(RE::Actor*, float);
+        inline static REL::Relocation<UpdateAnimation_t> _origPlayerUpdateAnimation;
+
+        static RE::BGSLocation* Hook_Player_GetEditorLocation1(const RE::TESObjectREFR* a_this);
+        using GetEditorLocation1_t = RE::BGSLocation*(const RE::TESObjectREFR*);
+        inline static REL::Relocation<GetEditorLocation1_t> _origPlayerGetEditorLocation1;
+
+        static bool Hook_Player_GetEditorLocation2(
+            RE::TESObjectREFR* a_this,
+            RE::NiPoint3& a_outPos,
+            RE::NiPoint3& a_outRot,
+            RE::TESForm*& a_outWorldOrCell,
+            RE::TESObjectCELL* a_fallback);
+        using GetEditorLocation2_t = bool(RE::TESObjectREFR*, RE::NiPoint3&, RE::NiPoint3&, RE::TESForm*&, RE::TESObjectCELL*);
+        inline static REL::Relocation<GetEditorLocation2_t> _origPlayerGetEditorLocation2;
+
+
         void RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player);
         void RestorePackages();
         void CheckAndRetargetLocation(
@@ -152,8 +175,10 @@ namespace AlternateActors {
         RE::ActorHandle _puppetHandle;
 
         std::atomic<bool> _playerSpeaking{ false };
+        std::atomic<bool> _inCompleteSpeaking{ false };
         std::atomic<bool> _speechHadSound{ false };
         std::chrono::steady_clock::time_point _speechStartTime{ std::chrono::steady_clock::now() };
+        std::chrono::steady_clock::time_point _speechAudioEndTime{ std::chrono::steady_clock::time_point{} };
         float _speechMinDuration{ 2.0f };
         std::uint32_t _dialogueSoundID{ static_cast<std::uint32_t>(-1) };
 

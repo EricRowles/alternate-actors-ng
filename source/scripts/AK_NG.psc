@@ -37,6 +37,12 @@ Bool Function CopyStats(Actor akFrom, Actor akTo) Global Native
 ; Restores akPlayer's original base stats and skills.
 Bool Function RestoreStats(Actor akPlayer) Global Native
 
+; Atomically applies donor appearance, stats, factions, and transfers inventory to player in a single native operation.
+Bool Function ApplyDonorProfile(Actor akDonor, Actor akPlayer, Actor akStorageFollower = None) Global Native
+
+; Atomically restores player appearance, stats, factions, and restores original inventory in a single native operation.
+Bool Function RestorePlayerProfile(Actor akPlayer, Actor akDonor = None, Actor akStorageFollower = None) Global Native
+
 ; Enables or disables autonomous idle AI pathing on the player when inactive.
 Function SetIdleAIEnabled(Bool abEnabled) Global Native
 

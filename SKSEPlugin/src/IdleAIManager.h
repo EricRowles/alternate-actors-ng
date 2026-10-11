@@ -1,6 +1,12 @@
 #pragma once
 
 #include <chrono>
+#include "RE/B/BSTSmartPointer.h"
+#include "RE/D/DialogueItem.h"
+
+namespace RE {
+    class TESObjectCELL;
+}
 
 namespace AlternateActors {
 
@@ -44,6 +50,9 @@ namespace AlternateActors {
         bool OpenSelfDialogue(RE::Actor* a_speaker = nullptr);
         bool TriggerVoiceLine(RE::Actor* a_speaker = nullptr);
 
+        bool CheckAndTriggerIdleDialogue();
+        void ClearCurrentDialogueItem() { _currentIdleDialogueItem.reset(); }
+
         bool IsAIActive() const { return _aiActive; }
         bool IsInSelfDialogue() const;
         void SetInSelfDialogue(bool a_inSelf) { _inSelfDialogue = a_inSelf; }
@@ -53,6 +62,8 @@ namespace AlternateActors {
             _isControllingNPC = false;
             _inSelfDialogue = false;
             _activeDonorActor.reset();
+            _lastCell = nullptr;
+            _currentIdleDialogueItem.reset();
         }
 
     private:
@@ -66,9 +77,14 @@ namespace AlternateActors {
         bool _isControllingNPC{ false };
         bool _aiActive{ false };
         bool _inSelfDialogue{ false };
+        bool _wasFirstPerson{ false };
         float _idleTimeoutSeconds{ 10.0f };
         RE::ActorHandle _activeDonorActor;
         std::chrono::steady_clock::time_point _lastInputTime{ std::chrono::steady_clock::now() };
+        std::chrono::steady_clock::time_point _lastIdleChatterTime{ std::chrono::steady_clock::now() };
+        RE::TESObjectCELL* _lastCell{ nullptr };
+        RE::BSTSmartPointer<RE::DialogueItem> _currentIdleDialogueItem;
     };
 
 }
+

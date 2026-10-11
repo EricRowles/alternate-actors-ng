@@ -51,6 +51,27 @@ namespace AlternateActors::Papyrus {
         return StatManager::GetSingleton().RestoreStatsFromPlayer(a_player);
     }
 
+    bool ApplyDonorProfile(RE::StaticFunctionTag*, RE::Actor* a_donor, RE::Actor* a_player, RE::Actor* a_storageFollower) {
+        if (!a_donor || !a_player) return false;
+        FaceManager::GetSingleton().CloneAppearance(a_donor, a_player);
+        StatManager::GetSingleton().TransferStatsToPlayer(a_player, a_donor);
+        FactionManager::GetSingleton().TransferFactionsToPlayer(a_player, a_donor);
+        InventoryManager::GetSingleton().StoreAndTransferToPlayer(a_player, a_donor, a_storageFollower);
+        return true;
+    }
+
+    bool RestorePlayerProfile(RE::StaticFunctionTag*, RE::Actor* a_player, RE::Actor* a_donor, RE::Actor* a_storageFollower) {
+        if (!a_player) return false;
+        if (a_donor) {
+            StatManager::GetSingleton().CopyStats(a_player, a_donor);
+        }
+        FaceManager::GetSingleton().RevertAppearance(a_player);
+        StatManager::GetSingleton().RestoreStatsFromPlayer(a_player);
+        InventoryManager::GetSingleton().RestoreAndTransferFromPlayer(a_player, a_donor, a_storageFollower);
+        FactionManager::GetSingleton().RestoreFactionsFromPlayer(a_player);
+        return true;
+    }
+
     void SetIdleAIEnabled(RE::StaticFunctionTag*, bool a_enabled) {
         IdleAIManager::GetSingleton().SetIdleAIEnabled(a_enabled);
     }
@@ -134,6 +155,8 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("TransferStats", className, TransferStats);
         a_vm->RegisterFunction("CopyStats", className, CopyStats);
         a_vm->RegisterFunction("RestoreStats", className, RestoreStats);
+        a_vm->RegisterFunction("ApplyDonorProfile", className, ApplyDonorProfile);
+        a_vm->RegisterFunction("RestorePlayerProfile", className, RestorePlayerProfile);
         a_vm->RegisterFunction("SetIdleAIEnabled", className, SetIdleAIEnabled);
         a_vm->RegisterFunction("SetIdleAITimeout", className, SetIdleAITimeout);
         a_vm->RegisterFunction("SetControllingNPC", className, SetControllingNPC);

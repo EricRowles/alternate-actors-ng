@@ -206,11 +206,11 @@ namespace AlternateActors {
                 toCount = toIt->second.first;
             }
 
-            // If recipient already has this item (e.g. from default outfit spawning), do not duplicate
-            if (!a_toActor->IsPlayerRef() && toCount >= count) {
+            // Only deduplicate outfit items when transferring between two non-player NPCs
+            if (!a_toActor->IsPlayerRef() && !a_fromActor->IsPlayerRef() && toCount >= count) {
                 a_fromActor->RemoveItem(boundObj, count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
             } else {
-                std::int32_t transferCount = (!a_toActor->IsPlayerRef() && toCount > 0) ? (count - toCount) : count;
+                std::int32_t transferCount = (!a_toActor->IsPlayerRef() && !a_fromActor->IsPlayerRef() && toCount > 0) ? (count - toCount) : count;
                 if (transferCount > 0) {
                     a_fromActor->RemoveItem(boundObj, transferCount, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_toActor);
                     itemsTransferred++;
@@ -295,6 +295,19 @@ namespace AlternateActors {
     bool InventoryManager::RestoreAndTransferFromPlayer(RE::Actor* a_player, RE::Actor* a_donor, RE::Actor* a_storageFollower) {
         if (!a_player) return false;
 
+        auto* equipMgr = RE::ActorEquipManager::GetSingleton();
+
+        // 0. Unequip any donor equipment currently worn on the player to ensure all equipment slots are free
+        if (equipMgr) {
+            auto playerInv = a_player->GetInventory();
+            for (const auto& [boundObj, entryPair] : playerInv) {
+                const auto& entryData = entryPair.second;
+                if (boundObj && entryData && entryData->IsWorn()) {
+                    equipMgr->UnequipObject(a_player, boundObj, nullptr, 1, nullptr, false, true, false, false);
+                }
+            }
+        }
+
         // 1. Return items from player to donor (if donor is valid)
         if (a_donor) {
             TransferAllItems(a_player, a_donor, true);
@@ -313,14 +326,31 @@ namespace AlternateActors {
                 static_cast<std::uint32_t>(a_storageFollower->GetFormID()));
 
             // Re-equip the items the player was originally wearing
-            auto* equipMgr = RE::ActorEquipManager::GetSingleton();
-            if (equipMgr) {
+            if (equipMgr && !_savedPlayerWornFormIDs.empty()) {
                 for (auto formID : _savedPlayerWornFormIDs) {
                     auto* item = RE::TESForm::LookupByID<RE::TESBoundObject>(formID);
                     if (item) {
-                        equipMgr->EquipObject(a_player, item, nullptr, 1, nullptr, false, true, false, true);
+                        SKSE::log::info("Re-equipping player item: {:08X} ({})",
+                            formID, item->GetName());
+                        equipMgr->EquipObject(a_player, item, nullptr, 1, nullptr, false, true, false, false);
                     }
                 }
+                a_player->Update3DModel();
+
+                // Also queue a secondary equip pass on next frame to ensure any asynchronous 3D resets / container adds settle
+                auto savedWorn = _savedPlayerWornFormIDs;
+                SKSE::GetTaskInterface()->AddTask([a_player, savedWorn]() {
+                    if (!a_player) return;
+                    auto* em = RE::ActorEquipManager::GetSingleton();
+                    if (!em) return;
+                    for (auto formID : savedWorn) {
+                        auto* item = RE::TESForm::LookupByID<RE::TESBoundObject>(formID);
+                        if (item) {
+                            em->EquipObject(a_player, item, nullptr, 1, nullptr, false, true, false, false);
+                        }
+                    }
+                    a_player->Update3DModel();
+                });
             }
             _savedPlayerWornFormIDs.clear();
         }

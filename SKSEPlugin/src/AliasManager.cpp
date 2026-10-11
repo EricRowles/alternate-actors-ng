@@ -6,6 +6,13 @@ namespace AlternateActors {
     static void DispatchForceRefTo(RE::BGSRefAlias* a_alias, RE::TESObjectREFR* a_target) {
         if (!a_alias || !a_target) return;
 
+        // Synchronously update quest's internal refAliasMap so native queries immediately see the new target
+        if (auto* quest = a_alias->owningQuest) {
+            RE::BSWriteLockGuard locker(quest->aliasAccessLock);
+            quest->refAliasMap.erase(a_alias->aliasID);
+            quest->refAliasMap.emplace(a_alias->aliasID, a_target->GetHandle());
+        }
+
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
         if (!vm) return;
 

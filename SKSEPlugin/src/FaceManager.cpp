@@ -23,7 +23,11 @@ namespace AlternateActors {
         if (!npc) return false;
 
         a_outSnapshot.race = npc->GetRace();
-        a_outSnapshot.faceNPC = (npc->faceNPC && npc->faceNPC != npc && npc->faceNPC->GetFormID() != 0x07) ? npc->faceNPC : nullptr;
+        if (npc->GetFormID() == 0x07) {
+            a_outSnapshot.faceNPC = nullptr;
+        } else {
+            a_outSnapshot.faceNPC = (npc->faceNPC && npc->faceNPC != npc) ? npc->faceNPC : npc;
+        }
         a_outSnapshot.fullName = npc->GetFullName();
         a_outSnapshot.height = npc->height;
         a_outSnapshot.weight = npc->weight;
@@ -32,6 +36,7 @@ namespace AlternateActors {
 
         // Voice Type resolution
         a_outSnapshot.voiceType = ImpersonationManager::GetNPCVoiceType(npc);
+
 
         if (npc->headRelatedData) {
             a_outSnapshot.hairColor = npc->headRelatedData->hairColor;
@@ -271,21 +276,25 @@ namespace AlternateActors {
 
         // Preserve donor's exact package priority order (head-to-tail)
         targetNPC->aiPackages.packages.clear();
+
+        // When transferring AI packages to the player, append DefaultSandboxCurrentLocation1024 (0x000BFB6B)
+        // at the tail as a universal fallback so autonomous idle AI can wander anywhere in Skyrim
+        if (a_targetActor && a_targetActor->IsPlayerRef()) {
+            auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
+            if (defaultSandbox) {
+                targetNPC->aiPackages.packages.push_front(defaultSandbox);
+            }
+        }
+
         for (auto it = a_snapshot.packages.rbegin(); it != a_snapshot.packages.rend(); ++it) {
             if (*it) {
                 targetNPC->aiPackages.packages.push_front(*it);
             }
         }
 
-        // Only add default sandbox fallback if the NPC has no AI packages defined
-        if (targetNPC->aiPackages.packages.empty() && !targetNPC->defaultPackList) {
-            auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x0001B619);
-            if (defaultSandbox) {
-                targetNPC->aiPackages.packages.push_front(defaultSandbox);
-            }
-        }
-
         // 8. Synchronous 3D mesh and skin update
+        a_targetActor->UpdateHairColor();
+        a_targetActor->UpdateSkinColor();
         a_targetActor->DoReset3D(true);
         a_targetActor->Update3DModel();
         a_targetActor->UpdateHairColor();
@@ -309,14 +318,68 @@ namespace AlternateActors {
             }
         }
 
-        // Apply face skin tint directly to face / head geometries ONLY if validly captured from donor's face 3D
-        if (a_snapshot.hasSkinTintColor && a_targetActor->Get3D()) {
-            RE::BSVisit::TraverseScenegraphGeometries(a_targetActor->Get3D(), [&](RE::BSGeometry* geom) {
+        // Apply face skin tint directly to face head geometry if applicable
+        RE::NiColor skinTint;
+        bool hasSkinTint = false;
+        if (a_snapshot.hasSkinTintColor) {
+            skinTint = a_snapshot.skinTintColor;
+            hasSkinTint = true;
+        } else if (a_snapshot.bodyTintColor.red != 0 || a_snapshot.bodyTintColor.green != 0 || a_snapshot.bodyTintColor.blue != 0) {
+            skinTint.red = static_cast<float>(a_snapshot.bodyTintColor.red) / 255.0f;
+            skinTint.green = static_cast<float>(a_snapshot.bodyTintColor.green) / 255.0f;
+            skinTint.blue = static_cast<float>(a_snapshot.bodyTintColor.blue) / 255.0f;
+            hasSkinTint = true;
+        } else {
+            // Find skin tone layer specifically from race data
+            auto sexIdx = (a_snapshot.sex == RE::SEX::kFemale) ? 1 : 0;
+            if (a_snapshot.race && a_snapshot.race->faceRelatedData[sexIdx] && a_snapshot.race->faceRelatedData[sexIdx]->tintMasks) {
+                const auto* tintMasks = a_snapshot.race->faceRelatedData[sexIdx]->tintMasks;
+                for (const auto* asset : *tintMasks) {
+                    if (asset && asset->texture.skinTone == RE::TESRace::FaceRelatedData::TintAsset::TintLayer::SkinTone::kSkinTone) {
+                        auto skinIndex = asset->texture.index;
+                        for (const auto& layer : a_snapshot.tintLayers) {
+                            if (layer.tintIndex == skinIndex) {
+                                skinTint.red = static_cast<float>(layer.tintColor.red) / 255.0f;
+                                skinTint.green = static_cast<float>(layer.tintColor.green) / 255.0f;
+                                skinTint.blue = static_cast<float>(layer.tintColor.blue) / 255.0f;
+                                hasSkinTint = true;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (hasSkinTint) {
+            auto* targetFace = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
+            if (targetFace) {
+                RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
+                    if (geom) {
+                        auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
+                        if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                            if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                                faceMat->tintColor = skinTint;
+                            }
+                        }
+                    }
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
+            }
+        }
+
+        // Soft matte lighting to prevent metallic face reflections
+        auto* target3D = a_targetActor->Get3D();
+        if (target3D) {
+            RE::BSVisit::TraverseScenegraphGeometries(target3D, [](RE::BSGeometry* geom) {
                 if (geom) {
                     auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
                     if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
-                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
-                            faceMat->tintColor = a_snapshot.skinTintColor;
+                        if (auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(shaderProp->material)) {
+                            mat->specularColorScale = 0.20f;
+                            mat->specularPower = 10.0f;
+                            mat->subSurfaceLightRolloff = 0.6f;
                         }
                     }
                 }

@@ -29,6 +29,12 @@ namespace AlternateActors {
         const std::vector<SwappedAliasRecord>& GetRecords() const { return _swappedRecords; }
         void AddRecord(const SwappedAliasRecord& record) { _swappedRecords.push_back(record); }
         bool HasRecord(RE::FormID a_questFormID, std::uint32_t a_aliasID) const;
+        bool HasQuest(RE::FormID a_questFormID) const {
+            for (const auto& rec : _swappedRecords) {
+                if (rec.questFormID == a_questFormID) return true;
+            }
+            return false;
+        }
 
     private:
         AliasManager() = default;
