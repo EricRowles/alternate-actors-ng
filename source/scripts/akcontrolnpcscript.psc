@@ -1,17 +1,12 @@
 Scriptname AKControlNPCScript extends ReferenceAlias  
 
+AKControlQuestScript property akquest Auto
 
-Event OnDeath(Actor akKiller)
-	Actor player = Game.GetPlayer()
-	If player
-		player.GetActorBase().SetEssential(False)
-		player.DamageActorValue("Health", 99999)
-	EndIf
-EndEvent
+Actor PlayerPuppetRef
 
 Event OnActivate(ObjectReference akActionRef)
-	If akActionRef == Game.GetPlayer()
-		Actor puppet = GetReference() as Actor
-		AK_NG.OpenSelfDialogue(puppet)
+	PlayerPuppetRef = akquest.Alias_PlayerPuppet.GetActorReference()
+	If akActionRef == PlayerPuppetRef
+		AK_NG.OpenSelfDialogue(PlayerPuppetRef)
 	EndIf
 EndEvent

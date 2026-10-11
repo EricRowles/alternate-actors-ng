@@ -144,33 +144,6 @@ namespace AlternateActors {
         player->AllowBleedoutDialogue(true);
         player->SetAIDriven(true);
 
-        // Ensure player base form has DefaultSandboxCurrentLocation1024 (0x000BFB6B) at tail as universal fallback
-        auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
-        if (playerBase) {
-            auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
-            if (defaultSandbox) {
-                bool hasSandbox = false;
-                for (auto* pkg : playerBase->aiPackages.packages) {
-                    if (pkg == defaultSandbox) {
-                        hasSandbox = true;
-                        break;
-                    }
-                }
-                if (!hasSandbox) {
-                    if (playerBase->aiPackages.packages.empty()) {
-                        playerBase->aiPackages.packages.push_front(defaultSandbox);
-                    } else {
-                        auto it = playerBase->aiPackages.packages.begin();
-                        auto last = it;
-                        for (; it != playerBase->aiPackages.packages.end(); ++it) {
-                            last = it;
-                        }
-                        playerBase->aiPackages.packages.insert_after(last, defaultSandbox);
-                    }
-                }
-            }
-        }
-
         player->EvaluatePackage(true, true);
 
         auto* currentPkg = player->GetCurrentPackage();

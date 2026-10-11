@@ -1,6 +1,5 @@
 Scriptname AKControlQuestScript extends Quest  
 
-AKControlQuest2Script property akquest2 Auto
 AKControlMCMScript property akquestmcm Auto
 
 float property akmodversion = 2.0 Auto
@@ -11,26 +10,55 @@ ObjectReference property AKControlCloneMarkerTemp auto	; temp use to mark where 
 spell property akcontrolrevertspell auto
 Spell Property akcontrolmorphspell Auto
 
-actor property akcontroltemp auto 			; used by spells to agree on the temp actor
-actor property OrigionalNPC Auto 			; used by spells to move around the origional Actor
-actor property akcontroltempmale auto		; male dragonborn puppet
-actor property akcontroltempFemale auto		; female dragonborn puppet
-actor Property Playerref Auto				; the player!
+ReferenceAlias Property Alias_PlayerPuppet Auto 	; Temp Actor currently behaving as player
+ReferenceAlias Property Alias_OriginalDonor Auto 	; Original Donor NPC
 
-bool property MainChar = True Auto			; is the player playing the MainChar or someone else?
+actor property akcontroltempmale auto			; male dragonborn puppet
+actor property akcontroltempFemale auto			; female dragonborn puppet
+actor Property PlayerRef Auto					; the player!
 
-ReferenceAlias Function GetControlTempAlias()
-	Return GetAliasByName("ControlTemp") as ReferenceAlias
+actor PlayerPuppetRef
+actor OriginalDonorRef
+
+; Initiation Function -----------------------------------------------------------------------------------
+Event OnInit()
+	akmaintenance()
+EndEvent
+
+Event OnPlayerLoadGame()
+	akMaintenance()
+EndEvent
+
+; Maintenance Function -----------------------------------------------------------------------------------
+function akmaintenance()
+	OriginalDonorRef = Alias_OriginalDonor.GetActorReference()
+
+	If !PlayerRef.HasSpell(akcontrolmorphspell)
+		PlayerRef.AddSpell(akcontrolmorphspell, false)
+	EndIf
+
+	If OriginalDonorRef && PlayerRef.HasSpell(akcontrolrevertspell)
+		PlayerRef.RemoveSpell(akcontrolrevertspell)
+	EndIf
+
+	; Synchronize SKSE Native settings from MCM properties on game load
+	AK_NG.SetIdleAIEnabled(akquestmcm.IdleAIEnabled)
+	AK_NG.SetIdleAITimeout(akquestmcm.IdleAITimeout)
+	AK_NG.SetImpersonationOptions(akquestmcm.ImpersonateConditions, akquestmcm.ImpersonateAliases, akquestmcm.ImpersonatePackages, akquestmcm.ImpersonateScripts)
+
+	If OriginalDonorRef
+		AK_NG.SetControllingNPC(True)
+		PlayerPuppetRef = Alias_PlayerPuppet.GetActorReference()
+		If PlayerPuppetRef
+			AK_NG.SetPuppetActor(PlayerPuppetRef)
+		EndIf
+		AK_NG.CopyAppearance(OriginalDonorRef, PlayerRef)
+	EndIf
 EndFunction
 
 ; Morph Complete Function -----------------------------------------------------------------------------------
-function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False, Float aktime = 0.0)
-	ReferenceAlias controlTempAlias = GetControlTempAlias()
-	Actor puppetActor = None
-	If controlTempAlias
-		puppetActor = controlTempAlias.GetReference() as Actor
-	EndIf
-	If akdonor == akcontroltemp || akdonor == akcontroltempmale || akdonor == akcontroltempFemale || (puppetActor && akdonor == puppetActor)
+function AKMorphComplete(Actor akdonor, Actor akimposter)
+	if akdonor == Alias_PlayerPuppet.GetActorReference()
 		akrevert(akimposter)
 		return
 	EndIf
@@ -38,7 +66,7 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 	; Capture original player name before any appearance or trait cloning occurs
 	String origPlayerName = AK_NG.GetOriginalPlayerName()
 	If origPlayerName == ""
-		origPlayerName = playerref.GetActorBase().GetName()
+		origPlayerName = PlayerRef.GetActorBase().GetName()
 	EndIf
 
 	akimposter.StopCombat()
@@ -47,98 +75,82 @@ function AKMorphComplete(Actor akdonor, Actor akimposter, Bool duration = False,
 	Game.FadeOutGame(true, true, 0.0, 0.3)
 	
 	; Dynamically select male or female puppet based on the player's gender
-	if AK_NG.GetActorSex(playerref) == 0
-		akcontroltemp = akcontroltempmale	
+	if AK_NG.GetActorSex(PlayerRef) == 0
+		Alias_PlayerPuppet.ForceRefTo(akcontroltempmale)
 	Else
-		akcontroltemp = akcontroltempFemale
+		Alias_PlayerPuppet.ForceRefTo(akcontroltempfemale)
 	EndIf
-	If controlTempAlias
-		controlTempAlias.ForceRefTo(akcontroltemp)
-	EndIf
-	AK_NG.SetPuppetActor(akcontroltemp)
+	PlayerPuppetRef = Alias_PlayerPuppet.GetActorReference()
+	AK_NG.SetPuppetActor(PlayerPuppetRef)
 
 	; Transfer traits from PC back to orignpc before getting new traits if we were already controlling an NPC
-	If MainChar == False
+	OriginalDonorRef = Alias_OriginalDonor.GetActorReference()
+	If OriginalDonorRef
 		AK_NG.EndImpersonation()
-		origionalnpc.moveto(akdonor)
+		OriginalDonorRef.moveto(akdonor)
 		Utility.Wait(0.1)
-		AK_NG.RestoreInventoryFromPlayer(playerref, origionalnpc, None)
-		AK_NG.CopyStats(playerref, origionalnpc)
+		AK_NG.RestoreInventoryFromPlayer(PlayerRef, OriginalDonorRef, None)
+		AK_NG.CopyStats(PlayerRef, OriginalDonorRef)
 	Else
-		akcontroltemp.moveto(akdonor)
+		PlayerPuppetRef.moveto(akdonor)
 		Utility.Wait(0.1) ; Allow 3D node attachment in loaded cell before copying appearance
 	EndIf
 	
-	origionalnpc = akdonor
-	
-	If mainchar == True
-		AK_NG.CopyAppearance(playerref, akcontroltemp)
-		AK_NG.CopyStats(playerref, akcontroltemp)			
-	EndIf
-	
 	; Make the player look and have stats like the donor NPC
-	If MainChar == True
-		AK_NG.ApplyDonorProfile(akdonor, playerref, akcontroltemp)
+	If OriginalDonorRef
+		AK_NG.ApplyDonorProfile(akdonor, PlayerRef, None)
 	Else
-		AK_NG.ApplyDonorProfile(akdonor, playerref, None)
+		AK_NG.CopyAppearance(PlayerRef, PlayerPuppetRef)
+		AK_NG.CopyStats(PlayerRef, PlayerPuppetRef)	
+		AK_NG.ApplyDonorProfile(akdonor, PlayerRef, PlayerPuppetRef)
 	EndIf
+	
+	Alias_OriginalDonor.ForceRefTo(akdonor)
 
-	origionalnpc.moveto(AKControlCloneMarker)
-	akcontroltemp.SetDisplayName(origPlayerName, True)
-	akcontroltemp.BlockActivation(True)
+	akdonor.moveto(AKControlCloneMarker)
+	PlayerPuppetRef.SetDisplayName(origPlayerName, True)
+	PlayerPuppetRef.BlockActivation(True)
+	
+	PlayerRef.addspell(akcontrolrevertspell, False) 
+	
+	AK_NG.SetControllingNPC(True)
+	AK_NG.BeginImpersonation(akdonor, PlayerRef)
 
 	Game.FadeOutGame(false, true, 0.0, 0.4)
-	
-	if akquestmcm.revertondeath == True
-		akimposter.GetActorBase().SetEssential(True)
-	EndIf
-	
-	
-	playerref.addspell(akcontrolrevertspell, False) 
-	
-	MainChar = False
-	AK_NG.SetControllingNPC(True)
-	AK_NG.BeginImpersonation(akdonor, playerref)
 
 	Debug.Notification("Control Swapped")
 EndFunction
 
 ; Revert Function -----------------------------------------------------------------------------------
 function akrevert(actor akimposter, Bool AKDrainmagic = False)
-	if MainChar == False
-		AK_NG.SetControllingNPC(False)
-		AK_NG.EndImpersonation()
-		
+	OriginalDonorRef = Alias_OriginalDonor.GetActorReference()
+	if OriginalDonorRef
+		PlayerPuppetRef = Alias_PlayerPuppet.GetActorReference()
+
 		Game.FadeOutGame(true, true, 0.0, 0.3)
+
+		AK_NG.SetControllingNPC(False)
+		AK_NG.EndImpersonation()		
 		
 		akcontrolclonemarkertemp.MoveTo(akimposter)
-		akimposter.moveto(akcontroltemp)
-		
-		origionalnpc.moveto(akimposter)
+		akimposter.moveto(PlayerPuppetRef)
 		
 		akimposter.StopCombat()
-		If origionalnpc
-			origionalnpc.StopCombat()
+
+		if OriginalDonorRef
+			OriginalDonorRef.moveto(akimposter)
+			OriginalDonorRef.StopCombat()
 		EndIf
 		akimposter.RemoveSpell(akcontrolrevertspell)
 		
-		AK_NG.RestorePlayerProfile(playerref, origionalnpc, akcontroltemp)
-		
-		ReferenceAlias controlTempAlias = GetControlTempAlias()
-		If controlTempAlias
-			controlTempAlias.Clear()
-		EndIf
+		AK_NG.RestorePlayerProfile(PlayerRef, OriginalDonorRef, PlayerPuppetRef)
 
-		akcontroltemp.BlockActivation(False)
-		akcontroltemp.SetDisplayName("")
+		PlayerPuppetRef.BlockActivation(False)
 		AK_NG.SetPuppetActor(None)
-		akcontroltemp.moveto(akcontrolclonemarker)
+		PlayerPuppetRef.moveto(akcontrolclonemarker)
 		akcontrolclonemarkertemp.moveto(akcontrolclonemarker)
-		origionalnpc = None
-		akcontroltemp = None
-
-		playerref.GetActorBase().SetEssential(False)
-		MainChar = True
+		Alias_OriginalDonor.Clear()
+		Alias_PlayerPuppet.Clear()
 
 		Game.FadeOutGame(false, true, 0.0, 0.4)
 		

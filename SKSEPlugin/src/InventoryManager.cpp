@@ -55,10 +55,6 @@ namespace AlternateActors {
 
         for (auto* spell : toRemove) {
             a_player->RemoveSpell(spell);
-            SKSE::log::info("Stashed and removed player dynamic spell '{:08X}' ({})",
-                static_cast<std::uint32_t>(spell->GetFormID()),
-                spell->GetName()
-            );
         }
 
         SKSE::log::info("Stashed {} player dynamic castable spells.", _playerSavedSpells.size());
@@ -95,12 +91,6 @@ namespace AlternateActors {
                 if (a_toActor->AddSpell(spell)) {
                     _transferredSpells.push_back(spell->GetFormID());
                     copiedCount++;
-                    SKSE::log::info("Copied dynamic spell '{:08X}' ({}) from {:08X} to {:08X}",
-                        static_cast<std::uint32_t>(spell->GetFormID()),
-                        spell->GetName(),
-                        static_cast<std::uint32_t>(a_fromActor->GetFormID()),
-                        static_cast<std::uint32_t>(a_toActor->GetFormID())
-                    );
                 }
             }
         }
@@ -115,12 +105,6 @@ namespace AlternateActors {
                     if (a_toActor->AddSpell(spell)) {
                         _transferredSpells.push_back(spell->GetFormID());
                         copiedCount++;
-                        SKSE::log::info("Copied base spell '{:08X}' ({}) from {:08X} to {:08X}",
-                            static_cast<std::uint32_t>(spell->GetFormID()),
-                            spell->GetName(),
-                            static_cast<std::uint32_t>(a_fromActor->GetFormID()),
-                            static_cast<std::uint32_t>(a_toActor->GetFormID())
-                        );
                     }
                 }
             }

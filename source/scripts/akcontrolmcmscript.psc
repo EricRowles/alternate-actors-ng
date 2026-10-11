@@ -2,11 +2,9 @@ Scriptname AKControlMCMScript extends SKI_ConfigBase
 ; This script powers Alternate Actors' MCM Menu using reliable Option-ID handlers
 
 AKControlQuestScript property akquest auto
-AKControlQuest2Script property akquest2 auto
-Actor Property Playerref Auto
+Actor Property PlayerRef Auto
 
 ; MCM Property Variables
-bool Property RevertOnDeath = True Auto 		; Revert to player on death
 bool Property IdleAIEnabled = True Auto
 Float Property IdleAITimeout = 5.0 Auto
 bool Property ImpersonateConditions = True Auto
@@ -14,13 +12,9 @@ bool Property ImpersonateAliases = True Auto
 bool Property ImpersonatePackages = True Auto
 bool Property ImpersonateScripts = False Auto
 
-; MCM Spell Properties
-Spell Property AKControlMorphSpell Auto
-
 ; Option IDs
 int _oid_idleAI
 int _oid_idleTimeout
-int _oid_revertOnDeath
 int _oid_revert
 int _oid_impersonateConditions
 int _oid_impersonateAliases
@@ -50,7 +44,6 @@ event OnPageReset(string page)
 		AddHeaderOption("Autonomous AI")
 		_oid_idleAI = AddToggleOption("Idle AI Pathing", IdleAIEnabled)
 		_oid_idleTimeout = AddSliderOption("Idle AI Delay", IdleAITimeout, "{1} s")
-		_oid_revertOnDeath = AddToggleOption("Revert on Death", RevertOnDeath)
 
 		; Right Column: NPC Impersonation System & Controls
 		SetCursorPosition(5)
@@ -62,7 +55,7 @@ event OnPageReset(string page)
 		_oid_impersonateScripts = AddToggleOption("Redirect Papyrus Scripts", ImpersonateScripts)
 		AddEmptyOption()
 
-		If akquest.MainChar == False
+		If akquest.Alias_OriginalDonor.GetActorReference()
 			_oid_revert = AddTextOption("Return to Body", "Click to Revert")
 		Else
 			_oid_revert = AddTextOption("Return to Body", "Already in Body", OPTION_FLAG_DISABLED)
@@ -75,9 +68,6 @@ event OnOptionSelect(int option)
 		IdleAIEnabled = !IdleAIEnabled
 		SetToggleOptionValue(_oid_idleAI, IdleAIEnabled)
 		AK_NG.SetIdleAIEnabled(IdleAIEnabled)
-	elseif option == _oid_revertOnDeath
-		RevertOnDeath = !RevertOnDeath
-		SetToggleOptionValue(_oid_revertOnDeath, RevertOnDeath)
 	elseif option == _oid_impersonateConditions
 		ImpersonateConditions = !ImpersonateConditions
 		SetToggleOptionValue(_oid_impersonateConditions, ImpersonateConditions)
@@ -95,9 +85,9 @@ event OnOptionSelect(int option)
 		SetToggleOptionValue(_oid_impersonateScripts, ImpersonateScripts)
 		AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
 	elseif option == _oid_revert
-		if akquest.MainChar == False
+		if akquest.Alias_OriginalDonor.GetActorReference()
 			SetTextOptionValue(_oid_revert, "Reverting...")
-			akquest.akrevert(playerref)
+			akquest.akrevert(PlayerRef)
 		endif
 	endif
 endEvent
@@ -127,8 +117,6 @@ event OnOptionHighlight(int option)
 		SetInfoText("Enables autonomous AI pathing on your player after a few seconds of inactivity.")
 	elseif option == _oid_idleTimeout
 		SetInfoText("Seconds of player inactivity before autonomous AI pathing begins.")
-	elseif option == _oid_revertOnDeath
-		SetInfoText("Revert back to your Dragonborn character if the controlled NPC falls in combat.")
 	elseif option == _oid_revert
 		SetInfoText("Immediately return control back to your original character.")
 	elseif option == _oid_impersonateConditions

@@ -808,35 +808,6 @@ namespace AlternateActors {
 
     void ImpersonationManager::SetPuppet(RE::Actor* a_puppet) {
         if (!a_puppet) {
-            if (auto* oldPuppet = GetPuppet()) {
-                oldPuppet->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kPlayerTeammate);
-                auto* followerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84E); // CurrentFollowerFaction
-                if (followerFaction) {
-                    oldPuppet->AddToFaction(followerFaction, -1);
-                }
-                auto* playerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x00000DB1); // PlayerFaction
-                if (playerFaction) {
-                    oldPuppet->AddToFaction(playerFaction, -1);
-                }
-                if (auto* base = skyrim_cast<RE::TESNPC*>(oldPuppet->GetActorBase())) {
-                    auto* followPkg = RE::TESForm::LookupByID<RE::TESPackage>(0x0004B037); // DefaultFollowPlayer
-                    if (followPkg && !base->aiPackages.packages.empty()) {
-                        std::vector<RE::TESPackage*> remaining;
-                        for (auto* pkg : base->aiPackages.packages) {
-                            if (pkg && pkg != followPkg) {
-                                remaining.push_back(pkg);
-                            }
-                        }
-                        base->aiPackages.packages.clear();
-                        for (auto it = remaining.rbegin(); it != remaining.rend(); ++it) {
-                            base->aiPackages.packages.push_front(*it);
-                        }
-                    }
-                }
-                oldPuppet->EvaluatePackage(false, false);
-                SKSE::log::info("Disengaged follower status from puppet {:08X}",
-                    static_cast<std::uint32_t>(oldPuppet->GetFormID()));
-            }
             _puppetHandle.reset();
             return;
         }
@@ -856,36 +827,7 @@ namespace AlternateActors {
         // 1. Set PlayerTeammate flag so puppet follows player, draws weapons, and assists in combat
         a_puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
 
-        // 2. Add DefaultFollowPlayer package (0x0004B037) so puppet paths and follows player
-        if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
-            auto* followPkg = RE::TESForm::LookupByID<RE::TESPackage>(0x0004B037); // DefaultFollowPlayer
-            if (followPkg) {
-                bool hasPkg = false;
-                for (auto* pkg : base->aiPackages.packages) {
-                    if (pkg == followPkg) {
-                        hasPkg = true;
-                        break;
-                    }
-                }
-                if (!hasPkg) {
-                    base->aiPackages.packages.push_front(followPkg);
-                }
-            }
-        }
-
-        // 3. Add to CurrentFollowerFaction (0x0005C84E) with rank 0
-        auto* followerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84E);
-        if (followerFaction) {
-            a_puppet->AddToFaction(followerFaction, 0);
-        }
-
-        // 4. Ensure in PlayerFaction (0x00000DB1) with rank 0
-        auto* playerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x00000DB1);
-        if (playerFaction) {
-            a_puppet->AddToFaction(playerFaction, 0);
-        }
-
-        // 5. Clear combat, allow dialogue, and evaluate package immediately
+        // 2. Clear combat, allow dialogue, and evaluate package immediately
         a_puppet->AllowPCDialogue(true);
         a_puppet->AllowBleedoutDialogue(true);
         a_puppet->StopCombat();
