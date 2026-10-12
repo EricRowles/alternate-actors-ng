@@ -24,7 +24,6 @@ namespace AlternateActors {
         void Clear() {
             _transferredSpells.clear();
             _playerSavedSpells.clear();
-            _savedPlayerWornFormIDs.clear();
         }
 
         const std::vector<RE::FormID>& GetTransferredSpellIDs() const { return _transferredSpells; }
@@ -34,10 +33,6 @@ namespace AlternateActors {
         void AddSavedPlayerSpellID(RE::FormID a_id) { _playerSavedSpells.push_back(a_id); }
         void SetSavedPlayerSpellIDs(const std::vector<RE::FormID>& a_ids) { _playerSavedSpells = a_ids; }
 
-        const std::vector<RE::FormID>& GetSavedPlayerWornFormIDs() const { return _savedPlayerWornFormIDs; }
-        void AddSavedPlayerWornFormID(RE::FormID a_id) { _savedPlayerWornFormIDs.push_back(a_id); }
-        void SetSavedPlayerWornFormIDs(const std::vector<RE::FormID>& a_ids) { _savedPlayerWornFormIDs = a_ids; }
-
     private:
         InventoryManager() = default;
         ~InventoryManager() = default;
@@ -46,7 +41,6 @@ namespace AlternateActors {
 
         std::vector<RE::FormID> _transferredSpells;
         std::vector<RE::FormID> _playerSavedSpells;
-        std::vector<RE::FormID> _savedPlayerWornFormIDs;
     };
 
 }
