@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "FaceManager.h"
+#include "AliasManager.h"
 #include "IdleAIManager.h"
 #include "ImpersonationManager.h"
 #include "RE/B/BSFaceGenNiNode.h"
@@ -286,9 +287,23 @@ namespace AlternateActors {
             }
         }
 
+        // Base NPC packages
         for (auto it = a_snapshot.packages.rbegin(); it != a_snapshot.packages.rend(); ++it) {
             if (*it) {
                 targetNPC->aiPackages.packages.push_front(*it);
+            }
+        }
+
+        // When applying to player, alias packages from the donor's quests must evaluate BEFORE base NPC packages
+        if (a_targetActor && a_targetActor->IsPlayerRef()) {
+            auto* donorActor = IdleAIManager::GetSingleton().GetActiveDonorActor();
+            if (donorActor) {
+                auto aliasPkgs = AliasManager::GetSingleton().GetAliasPackages(donorActor);
+                for (auto it = aliasPkgs.rbegin(); it != aliasPkgs.rend(); ++it) {
+                    if (*it) {
+                        targetNPC->aiPackages.packages.push_front(*it);
+                    }
+                }
             }
         }
 

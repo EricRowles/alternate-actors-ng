@@ -36,6 +36,10 @@ namespace AlternateActors {
             return false;
         }
 
+        // Returns all AI packages granted by active quest aliases that currently reference the actor,
+        // sorted by quest priority (highest priority first).
+        std::vector<RE::TESPackage*> GetAliasPackages(RE::Actor* a_actor) const;
+
     private:
         AliasManager() = default;
         ~AliasManager() = default;

@@ -3,6 +3,50 @@
 
 namespace AlternateActors {
 
+    static void AttachAliasToActor(RE::BGSRefAlias* a_alias, RE::TESObjectREFR* a_target) {
+        if (!a_alias || !a_target) return;
+        auto* quest = a_alias->owningQuest;
+        if (!quest) return;
+
+        auto* aliasArray = a_target->extraList.GetByType<RE::ExtraAliasInstanceArray>();
+        if (!aliasArray) {
+            aliasArray = RE::BSExtraData::Create<RE::ExtraAliasInstanceArray>();
+            if (!aliasArray) return;
+            a_target->extraList.Add(aliasArray);
+        }
+
+        RE::BSWriteLockGuard locker(aliasArray->lock);
+        for (auto* inst : aliasArray->aliases) {
+            if (inst && inst->quest == quest && inst->alias == a_alias) {
+                return; // already attached
+            }
+        }
+
+        auto* inst = new RE::BGSRefAliasInstanceData();
+        inst->quest = quest;
+        inst->alias = a_alias;
+        inst->instancedPackages = nullptr;
+        aliasArray->aliases.push_back(inst);
+    }
+
+    static void DetachAliasFromActor(RE::BGSRefAlias* a_alias, RE::TESObjectREFR* a_target) {
+        if (!a_alias || !a_target) return;
+        auto* quest = a_alias->owningQuest;
+        if (!quest) return;
+
+        auto* aliasArray = a_target->extraList.GetByType<RE::ExtraAliasInstanceArray>();
+        if (!aliasArray) return;
+
+        RE::BSWriteLockGuard locker(aliasArray->lock);
+        for (auto it = aliasArray->aliases.begin(); it != aliasArray->aliases.end(); ++it) {
+            if (*it && (*it)->quest == quest && (*it)->alias == a_alias) {
+                delete *it;
+                aliasArray->aliases.erase(it);
+                break;
+            }
+        }
+    }
+
     static void DispatchForceRefTo(RE::BGSRefAlias* a_alias, RE::TESObjectREFR* a_target) {
         if (!a_alias || !a_target) return;
 
@@ -11,6 +55,19 @@ namespace AlternateActors {
             RE::BSWriteLockGuard locker(quest->aliasAccessLock);
             quest->refAliasMap.erase(a_alias->aliasID);
             quest->refAliasMap.emplace(a_alias->aliasID, a_target->GetHandle());
+        }
+
+        // Synchronously update actor ExtraAliasInstanceArray on target and previous reference
+        auto oldRef = a_alias->GetReference();
+        if (oldRef && oldRef != a_target) {
+            DetachAliasFromActor(a_alias, oldRef);
+            if (auto* oldActor = oldRef->As<RE::Actor>()) {
+                oldActor->EvaluatePackage(false, false);
+            }
+        }
+        AttachAliasToActor(a_alias, a_target);
+        if (auto* targetActor = a_target->As<RE::Actor>()) {
+            targetActor->EvaluatePackage(false, false);
         }
 
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
@@ -187,6 +244,55 @@ namespace AlternateActors {
 
     void AliasManager::Clear() {
         _swappedRecords.clear();
+    }
+
+    std::vector<RE::TESPackage*> AliasManager::GetAliasPackages(RE::Actor* a_actor) const {
+        std::vector<RE::TESPackage*> result;
+        if (!a_actor) return result;
+
+        auto* aliasArray = a_actor->extraList.GetByType<RE::ExtraAliasInstanceArray>();
+        if (!aliasArray) return result;
+
+        struct AliasPkgEntry {
+            std::int8_t questPriority;
+            RE::TESPackage* pkg;
+        };
+        std::vector<AliasPkgEntry> entries;
+
+        {
+            RE::BSReadLockGuard locker(aliasArray->lock);
+            for (auto* inst : aliasArray->aliases) {
+                if (!inst || !inst->quest || !inst->instancedPackages) continue;
+                if (!inst->quest->IsRunning()) continue;
+
+                std::int8_t priority = inst->quest->data.priority;
+                for (auto* pkg : *inst->instancedPackages) {
+                    if (pkg) {
+                        entries.push_back({ priority, pkg });
+                    }
+                }
+            }
+        }
+
+        // Sort by quest priority descending (higher priority quests evaluate first)
+        std::stable_sort(entries.begin(), entries.end(), [](const AliasPkgEntry& a, const AliasPkgEntry& b) {
+            return a.questPriority > b.questPriority;
+        });
+
+        for (const auto& entry : entries) {
+            bool found = false;
+            for (auto* existing : result) {
+                if (existing == entry.pkg) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                result.push_back(entry.pkg);
+            }
+        }
+
+        return result;
     }
 
 }

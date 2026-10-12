@@ -323,11 +323,32 @@ namespace AlternateActors {
             auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
             if (donorBase && playerBase) {
                 std::vector<RE::TESPackage*> donorPkgs;
-                for (auto* pkg : donorBase->aiPackages.packages) {
+
+                // Priority 1: Quest alias packages (MG01, etc.)
+                auto aliasPkgs = AliasManager::GetSingleton().GetAliasPackages(donor);
+                for (auto* pkg : aliasPkgs) {
                     if (pkg) {
                         donorPkgs.push_back(pkg);
                     }
                 }
+
+                // Priority 2: Base NPC packages
+                for (auto* pkg : donorBase->aiPackages.packages) {
+                    if (pkg) {
+                        bool alreadyAdded = false;
+                        for (auto* p : donorPkgs) {
+                            if (p == pkg) {
+                                alreadyAdded = true;
+                                break;
+                            }
+                        }
+                        if (!alreadyAdded) {
+                            donorPkgs.push_back(pkg);
+                        }
+                    }
+                }
+
+                // Priority 3: Fallback sandbox
                 auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
                 if (defaultSandbox) {
                     bool hasSandbox = false;
