@@ -132,15 +132,6 @@ namespace AlternateActors {
 
         _aiActive = true;
 
-        auto* camera = RE::PlayerCamera::GetSingleton();
-        if (camera && camera->IsInFirstPerson()) {
-            _wasFirstPerson = true;
-            camera->ForceThirdPerson();
-        } else {
-            _wasFirstPerson = false;
-        }
-
-        player->AllowPCDialogue(true);
         player->AllowBleedoutDialogue(true);
         player->SetAIDriven(true);
 
@@ -158,17 +149,8 @@ namespace AlternateActors {
     void IdleAIManager::StopIdleAI() {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (player) {
-            player->AllowPCDialogue(false);
             player->SetAIDriven(false);
             player->EvaluatePackage(false, false);
-
-            if (_wasFirstPerson) {
-                auto* camera = RE::PlayerCamera::GetSingleton();
-                if (camera) {
-                    camera->ForceFirstPerson();
-                }
-                _wasFirstPerson = false;
-            }
 
             if (_aiActive) {
                 SKSE::log::info("Player input detected - disengaged autonomous AI pathing.");

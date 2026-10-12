@@ -77,7 +77,6 @@ namespace AlternateActors {
         bool _isControllingNPC{ false };
         bool _aiActive{ false };
         bool _inSelfDialogue{ false };
-        bool _wasFirstPerson{ false };
         float _idleTimeoutSeconds{ 10.0f };
         RE::ActorHandle _activeDonorActor;
         std::chrono::steady_clock::time_point _lastInputTime{ std::chrono::steady_clock::now() };
