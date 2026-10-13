@@ -61,9 +61,9 @@ namespace AlternateActors {
         }
 
         // Restore pool values (damage modifier = 0) so actor doesn't suffer broken health/stamina/magicka pools
-        avOwner->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth, avOwner->GetBaseActorValue(RE::ActorValue::kHealth));
-        avOwner->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka, avOwner->GetBaseActorValue(RE::ActorValue::kMagicka));
-        avOwner->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kStamina, avOwner->GetBaseActorValue(RE::ActorValue::kStamina));
+        avOwner->RestoreActorValue(RE::ActorValue::kHealth, avOwner->GetBaseActorValue(RE::ActorValue::kHealth));
+        avOwner->RestoreActorValue(RE::ActorValue::kMagicka, avOwner->GetBaseActorValue(RE::ActorValue::kMagicka));
+        avOwner->RestoreActorValue(RE::ActorValue::kStamina, avOwner->GetBaseActorValue(RE::ActorValue::kStamina));
 
         SKSE::log::info("Applied {} stat/skill values to actor {:08X}.",
             a_snapshot.baseValues.size(),

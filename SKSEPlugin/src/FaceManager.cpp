@@ -53,8 +53,7 @@ namespace AlternateActors {
         if (hairObj) {
             RE::BSVisit::TraverseScenegraphGeometries(hairObj, [&](RE::BSGeometry* geom) {
                 if (geom) {
-                    auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
-                    if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                    if (auto* shaderProp = geom->lightingShaderProp_cast()) {
                         if (auto* hairMat = skyrim_cast<RE::BSLightingShaderMaterialHairTint*>(shaderProp->material)) {
                             a_outSnapshot.hairTintColor = hairMat->tintColor;
                             a_outSnapshot.hasHairTintColor = true;
@@ -72,8 +71,7 @@ namespace AlternateActors {
         if (faceObj) {
             RE::BSVisit::TraverseScenegraphGeometries(faceObj, [&](RE::BSGeometry* geom) {
                 if (geom) {
-                    auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
-                    if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                    if (auto* shaderProp = geom->lightingShaderProp_cast()) {
                         if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
                             a_outSnapshot.skinTintColor = faceMat->tintColor;
                             a_outSnapshot.hasSkinTintColor = true;
@@ -321,8 +319,7 @@ namespace AlternateActors {
             if (targetHair) {
                 RE::BSVisit::TraverseScenegraphGeometries(targetHair, [&](RE::BSGeometry* geom) {
                     if (geom) {
-                        auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
-                        if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                        if (auto* shaderProp = geom->lightingShaderProp_cast()) {
                             if (auto* hairMat = skyrim_cast<RE::BSLightingShaderMaterialHairTint*>(shaderProp->material)) {
                                 hairMat->tintColor = a_snapshot.hairTintColor;
                             }
@@ -372,8 +369,7 @@ namespace AlternateActors {
             if (targetFace) {
                 RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
                     if (geom) {
-                        auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
-                        if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                        if (auto* shaderProp = geom->lightingShaderProp_cast()) {
                             if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
                                 faceMat->tintColor = skinTint;
                             }
@@ -389,8 +385,7 @@ namespace AlternateActors {
         if (target3D) {
             RE::BSVisit::TraverseScenegraphGeometries(target3D, [](RE::BSGeometry* geom) {
                 if (geom) {
-                    auto* prop = geom->GetGeometryRuntimeData().properties[RE::BSGeometry::States::kProperty].get();
-                    if (auto* shaderProp = skyrim_cast<RE::BSLightingShaderProperty*>(prop)) {
+                    if (auto* shaderProp = geom->lightingShaderProp_cast()) {
                         if (auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(shaderProp->material)) {
                             mat->specularColorScale = 0.20f;
                             mat->specularPower = 10.0f;

@@ -9,8 +9,11 @@ project(
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# CommonLibSSE-NG configuration (exported as CommonLibSSE by vcpkg port)
-find_package(CommonLibSSE REQUIRED)
+# CommonLibSSE-NG configuration via Git submodule
+set(BUILD_TESTS OFF CACHE BOOL "Disable CommonLibSSE unit tests" FORCE)
+set(SKSE_SUPPORT_XBYAK ON CACHE BOOL "Enable Xbyak support" FORCE)
+set(COMMONLIB_ENABLE_IPO OFF CACHE BOOL "Disable IPO to speed up builds" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../extern/CommonLibSSE-NG" "${CMAKE_CURRENT_BINARY_DIR}/CommonLibSSE-NG" EXCLUDE_FROM_ALL)
 
 add_library(${PROJECT_NAME} SHARED
     src/PCH.h

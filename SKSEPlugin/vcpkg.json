@@ -3,6 +3,9 @@
   "name": "alternate-actors-native",
   "version-string": "1.0.0",
   "dependencies": [
-    "commonlibsse-ng"
+    "spdlog",
+    "directxtk",
+    "rapidcsv",
+    "xbyak"
   ]
 }
