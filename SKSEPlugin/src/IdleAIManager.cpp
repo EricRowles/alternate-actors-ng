@@ -78,7 +78,19 @@ namespace AlternateActors {
 
         if (a_event->menuName == "Dialogue Menu"sv) {
             if (!a_event->opening) {
-                if (!ImpersonationManager::GetSingleton().IsPlayerSpeaking()) {
+                auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+                auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+                auto* donor = ImpersonationManager::GetSingleton().GetDonor();
+                bool topicActive = false;
+                if (topicMgr) {
+                    if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
+                        topicActive = true;
+                    }
+                    if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
+                        topicActive = true;
+                    }
+                }
+                if (!ImpersonationManager::GetSingleton().IsPlayerSpeaking() && !topicActive) {
                     _inSelfDialogue = false;
                 }
             }
@@ -185,14 +197,63 @@ namespace AlternateActors {
                 a_speaker = player;
             }
         }
+        if (!a_speaker) return false;
+
+        SKSE::log::info("OpenSelfDialogue: received request for speaker {:08X} (puppet: {:08X}, donor: {:08X})",
+            static_cast<std::uint32_t>(a_speaker->GetFormID()),
+            puppet ? static_cast<std::uint32_t>(puppet->GetFormID()) : 0,
+            donor ? static_cast<std::uint32_t>(donor->GetFormID()) : 0);
+
+        auto* task = SKSE::GetTaskInterface();
+        if (task) {
+            RE::ActorHandle speakerHandle = a_speaker->GetHandle();
+            task->AddTask([speakerHandle]() {
+                auto speaker = speakerHandle.get();
+                if (!speaker) {
+                    SKSE::log::warn("OpenSelfDialogue task: speaker handle is no longer valid");
+                    return;
+                }
+                IdleAIManager::GetSingleton().OpenSelfDialogueDirect(speaker.get());
+            });
+            return true;
+        }
+
+        return OpenSelfDialogueDirect(a_speaker);
+    }
+
+    bool IdleAIManager::OpenSelfDialogueDirect(RE::Actor* a_speaker) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !a_speaker) return false;
+
+        auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+        auto* donor = ImpersonationManager::GetSingleton().GetDonor();
 
         auto* ui = RE::UI::GetSingleton();
-        if (ui && (ui->GameIsPaused() || ui->IsMenuOpen("Dialogue Menu"sv) || ui->IsModalMenuOpen())) {
-            return false;
+        if (ui) {
+            if (ui->GameIsPaused()) {
+                SKSE::log::warn("OpenSelfDialogueDirect: Game is paused, aborting");
+                return false;
+            }
+            if (ui->IsMenuOpen("Dialogue Menu"sv)) {
+                SKSE::log::warn("OpenSelfDialogueDirect: Dialogue Menu is already open, aborting");
+                return false;
+            }
+            if (ui->IsModalMenuOpen()) {
+                SKSE::log::warn("OpenSelfDialogueDirect: Modal menu is open, aborting");
+                return false;
+            }
         }
 
         if (_aiActive) {
             StopIdleAI();
+        }
+
+        if (player->IsInCombat()) {
+            SKSE::log::warn("OpenSelfDialogueDirect: Player is currently in combat!");
+        }
+        if (a_speaker->IsInCombat()) {
+            SKSE::log::warn("OpenSelfDialogueDirect: Speaker {:08X} is currently in combat!",
+                static_cast<std::uint32_t>(a_speaker->GetFormID()));
         }
 
         // Enable dialogue permissions on both
@@ -203,8 +264,12 @@ namespace AlternateActors {
 
         _inSelfDialogue = true;
 
-        SKSE::log::info("OpenSelfDialogue: initiating SetDialogueWithPlayer on speaker {:08X} (isPuppet: {})",
-            static_cast<std::uint32_t>(a_speaker->GetFormID()), (a_speaker == puppet));
+        SKSE::log::info("OpenSelfDialogueDirect: initiating SetDialogueWithPlayer on speaker {:08X} (isPuppet: {}, donor: {:08X}, voiceType: {:08X})",
+            static_cast<std::uint32_t>(a_speaker->GetFormID()),
+            (a_speaker == puppet),
+            donor ? static_cast<std::uint32_t>(donor->GetFormID()) : 0,
+            ImpersonationManager::GetSingleton().GetDonorVoiceType() ?
+                static_cast<std::uint32_t>(ImpersonationManager::GetSingleton().GetDonorVoiceType()->GetFormID()) : 0);
 
         // Open native dialogue menu directly with the speaker
         bool opened = a_speaker->SetDialogueWithPlayer(true, false, nullptr);
@@ -216,7 +281,12 @@ namespace AlternateActors {
             SKSE::log::warn("SetDialogueWithPlayer returned false for actor {:08X}, attempting force-greet fallback",
                 static_cast<std::uint32_t>(a_speaker->GetFormID()));
             bool greeted = a_speaker->SetDialogueWithPlayer(true, true, nullptr);
-            if (!greeted) {
+            if (greeted) {
+                SKSE::log::info("Successfully opened self-dialogue via force-greet fallback with actor {:08X}",
+                    static_cast<std::uint32_t>(a_speaker->GetFormID()));
+            } else {
+                SKSE::log::error("Failed to open dialogue with actor {:08X} even with force-greet fallback",
+                    static_cast<std::uint32_t>(a_speaker->GetFormID()));
                 _inSelfDialogue = false;
             }
             return greeted;
@@ -232,18 +302,13 @@ namespace AlternateActors {
         auto* donor = ImpersonationManager::GetSingleton().GetDonor();
         if (!puppet && !donor) return false;
 
-        auto* ui = RE::UI::GetSingleton();
-        bool dialogueMenuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
-
-        if (dialogueMenuOpen) {
-            auto* topicMgr = RE::MenuTopicManager::GetSingleton();
-            if (topicMgr) {
-                if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
-                    return true;
-                }
-                if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
-                    return true;
-                }
+        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        if (topicMgr) {
+            if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
+                return true;
+            }
+            if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
+                return true;
             }
         }
 

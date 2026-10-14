@@ -49,6 +49,7 @@ namespace AlternateActors {
         // 2. If checking on player OR (puppet during self-dialogue), try substituting donor
         bool isSelfDialogue = IdleAIManager::GetSingleton().IsInSelfDialogue();
         if (a_thisObj && (a_thisObj == player || (puppet && a_thisObj == puppet && isSelfDialogue))) {
+            bool isPuppetSelf = (puppet && a_thisObj == puppet && isSelfDialogue);
             if constexpr (ID == 426) {
                 auto* targetVoice = static_cast<RE::TESForm*>(a_p1);
                 if (targetVoice && mgr.GetDonorVoiceType() && targetVoice == mgr.GetDonorVoiceType()) {
@@ -128,6 +129,13 @@ namespace AlternateActors {
                 if (player && a_this == player->GetActorBase()) {
                     return mgr._donorVoiceType;
                 }
+                auto* puppet = mgr.GetPuppet();
+                if (puppet && a_this == puppet->GetActorBase()) {
+                    if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
+                        return mgr._donorVoiceType;
+                    }
+                    return nullptr;
+                }
                 if (a_this->voiceType) {
                     return a_this->voiceType;
                 }
@@ -158,6 +166,7 @@ namespace AlternateActors {
         }
     }
 
+
     void ImpersonationManager::OnDialogueResponseStarted(RE::DialogueResponse* a_response) {
         _playerSpeaking.store(true, std::memory_order_relaxed);
         _speechStartTime = std::chrono::steady_clock::now();
@@ -182,14 +191,8 @@ namespace AlternateActors {
         if (a_player) {
             a_player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
             _origPlayerSetSpeakingDone(a_player, true);
-            if (auto* process = a_player->GetActorRuntimeData().currentProcess; process && process->high) {
-                for (auto& handle : process->high->soundHandles) {
-                    if (handle.IsValid()) {
-                        handle.Stop();
-                    }
-                }
-            }
             if (auto* faceData = a_player->GetFaceGenAnimationData()) {
+                RE::BSSpinLockGuard locker(faceData->lock);
                 faceData->Reset(0.0f, false, true, false, false);
                 faceData->ClearExpressionOverride();
             }
@@ -197,23 +200,28 @@ namespace AlternateActors {
             a_player->SetEmotionValue(0);
         }
 
-        if (auto* puppet = GetPuppet()) {
+        auto* puppet = GetPuppet();
+        if (puppet) {
             puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
-            _origCharSetSpeakingDone(puppet, true);
             puppet->SetEmotionType(RE::EmotionType::kNeutral);
             puppet->SetEmotionValue(0);
+            if (auto* spkFace = puppet->GetFaceGenAnimationData()) {
+                RE::BSSpinLockGuard locker(spkFace->lock);
+                spkFace->Reset(0.0f, false, true, false, false);
+                spkFace->ClearExpressionOverride();
+            }
         }
 
-        if (auto* donor = GetDonor()) {
-            donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
-            _origCharSetSpeakingDone(donor, true);
-            donor->SetEmotionType(RE::EmotionType::kNeutral);
-            donor->SetEmotionValue(0);
-        }
-
-        auto* ui = RE::UI::GetSingleton();
-        if (ui && !ui->IsMenuOpen("Dialogue Menu"sv)) {
-            IdleAIManager::GetSingleton().SetInSelfDialogue(false);
+        // Advance MenuTopicManager
+        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        if (topicMgr) {
+            SKSE::log::info("CompleteSpeaking: signaling MenuTopicManager to advance (waitingToAdvance: {})",
+                topicMgr->waitingToAdvance);
+            topicMgr->canSkip = true;
+            topicMgr->advanceRequested = true;
+            if (puppet) {
+                topicMgr->lastSpeaker = puppet->GetHandle();
+            }
         }
 
         IdleAIManager::GetSingleton().ClearCurrentDialogueItem();
@@ -237,18 +245,21 @@ namespace AlternateActors {
         auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - _speechStartTime).count();
 
-        // 1. Check if any audio sound handle on player is currently playing
+        // Check if player clicked to advance/skip line via MenuTopicManager
+        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        if (topicMgr && topicMgr->advanceRequested && elapsed > 0.25f) {
+            SKSE::log::info("Player requested dialogue line skip via MenuTopicManager (elapsed: {:.2f}s)", elapsed);
+            CompleteSpeaking(player);
+            return true;
+        }
+
+        // 1. Check if audio sound handle on player is currently playing
         bool soundPlaying = false;
         auto* process = player->GetActorRuntimeData().currentProcess;
         if (process && process->high) {
             for (auto& soundHandle : process->high->soundHandles) {
                 if (soundHandle.IsValid() && soundHandle.IsPlaying()) {
                     soundPlaying = true;
-                    if (!_speechHadSound.load(std::memory_order_relaxed)) {
-                        _speechStartTime = now;
-                        elapsed = 0.0f;
-                    }
-                    _speechHadSound.store(true, std::memory_order_relaxed);
                     break;
                 }
             }
@@ -256,24 +267,36 @@ namespace AlternateActors {
 
         if (soundPlaying) {
             AttachSoundHandlesToHead(player);
+            if (!_speechHadSound.load(std::memory_order_relaxed)) {
+                _speechStartTime = now;
+                elapsed = 0.0f;
+            }
+            _speechHadSound.store(true, std::memory_order_relaxed);
+
             // Safety timeout of 25.0s in case sound loops
             if (elapsed < 25.0f) {
                 return false;
             }
         }
 
-        // 2. Check BSFaceGenAnimationData phoneme completion
+        // 2. Check BSFaceGenAnimationData phoneme completion on player
         bool phonemesActive = false;
         if (auto* faceData = player->GetFaceGenAnimationData()) {
             RE::BSSpinLockGuard locker(faceData->lock);
-            const auto& pkf = faceData->phenomeKeyFrame;
-            if (pkf.values && pkf.count > 0 && pkf.count < 64) {
-                for (std::uint32_t i = 0; i < pkf.count; ++i) {
-                    if (pkf.values[i] > 0.005f) {
-                        phonemesActive = true;
-                        break;
+            auto checkActiveKeyframe = [](const RE::BSFaceGenKeyframeMultiple& kf) -> bool {
+                if (kf.values && kf.count > 0 && kf.count < 64) {
+                    for (std::uint32_t i = 0; i < kf.count; ++i) {
+                        if (kf.values[i] > 0.005f) {
+                            return true;
+                        }
                     }
                 }
+                return false;
+            };
+            if (checkActiveKeyframe(faceData->phoneme1) ||
+                checkActiveKeyframe(faceData->phoneme3) ||
+                checkActiveKeyframe(faceData->phenomeKeyFrame)) {
+                phonemesActive = true;
             }
         }
 
@@ -382,7 +405,7 @@ namespace AlternateActors {
         }
     }
 
-    bool ImpersonationManager::RedirectDialogueToPlayer(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused) {
+    bool ImpersonationManager::HandleProxyDialogueOutput(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !a_speaker) {
             return _origCharUpdateInDialogue(a_speaker, a_response, a_unused);
@@ -394,57 +417,93 @@ namespace AlternateActors {
             bool menuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
             auto* donor = GetDonor();
             bool isDonor = (donor && a_speaker == donor);
+            auto* puppet = GetPuppet();
+            bool isPuppet = (puppet && a_speaker == puppet);
 
-            // Allow redirection if in self-dialogue, dialogue menu is open, or if this is the donor NPC (scene/package speech)
-            if (inSelf || menuOpen || isDonor) {
-                SKSE::log::info("Redirecting speaker {:08X} dialogue to player: text='{}', voice='{}', sound={:08X}",
-                    static_cast<std::uint32_t>(a_speaker->GetFormID()),
+            auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+            bool inTopicWithSpeaker = false;
+            if (topicMgr && (isPuppet || isDonor)) {
+                auto spkHandle = a_speaker->GetHandle();
+                if (topicMgr->speaker == spkHandle || topicMgr->lastSpeaker == spkHandle) {
+                    inTopicWithSpeaker = true;
+                }
+            }
+
+            // Suppress automatic puppet NPC goodbye farewell blurbs (subtype kGoodBye = 78)
+            bool isNpcGoodbye = (topicMgr && topicMgr->currentTopicInfo && topicMgr->currentTopicInfo->parentTopic &&
+                                 topicMgr->currentTopicInfo->parentTopic->data.subtype.get() == RE::DIALOGUE_DATA::Subtype::kGoodBye);
+            if (isPuppet && isNpcGoodbye) {
+                SKSE::log::info("Suppressing puppet NPC goodbye farewell line: '{}'", a_response->text.c_str());
+                return false;
+            }
+
+            if (inSelf || menuOpen || inTopicWithSpeaker || isDonor || isPuppet) {
+                SKSE::log::info("Decoupled proxy dialogue: text='{}', voice='{}', sound={:08X}",
                     a_response->text.c_str(),
                     a_response->voice.c_str(),
                     a_response->voiceSound ? static_cast<std::uint32_t>(a_response->voiceSound->GetFormID()) : 0);
 
-                // Ensure proxy / donor actor does NOT mouth lines, play audio, or animate
-                if (auto* faceData = a_speaker->GetFaceGenAnimationData()) {
-                    RE::BSSpinLockGuard locker(faceData->lock);
-                    faceData->Reset(0.0f, true, true, true, false);
-                    faceData->ClearExpressionOverride();
-                    const auto& pkf = faceData->phenomeKeyFrame;
-                    if (pkf.values && pkf.count > 0 && pkf.count < 64) {
-                        for (std::uint32_t i = 0; i < pkf.count; ++i) {
-                            pkf.values[i] = 0.0f;
-                        }
+                // 1. Prepare player response clone with sensory data (sound, lip, emotion, idle)
+                RE::DialogueResponse playerResp;
+                playerResp.text = a_response->text;
+                playerResp.animFaceArchType = a_response->animFaceArchType;
+                playerResp.percent = a_response->percent;
+                playerResp.voice = a_response->voice;
+                playerResp.speakerIdle = a_response->speakerIdle;
+                playerResp.listenIdle = a_response->listenIdle;
+                playerResp.voiceSound = a_response->voiceSound;
+                playerResp.useEmotion = a_response->useEmotion;
+                playerResp.soundLip = a_response->soundLip;
+
+                // 2. Prepare puppet response clone: has text for subtitles/topic advance,
+                // but completely stripped of audio, mouth phonemes, emotion, and speaking gestures.
+                RE::DialogueResponse puppetResp;
+                puppetResp.text = a_response->text;
+                puppetResp.animFaceArchType = RE::EmotionType::kNeutral;
+                puppetResp.percent = 0;
+                puppetResp.voice = ""sv;
+                puppetResp.speakerIdle = nullptr;
+                puppetResp.listenIdle = nullptr;
+                puppetResp.voiceSound = nullptr;
+                puppetResp.useEmotion = false;
+                puppetResp.soundLip = false;
+
+                // 3. Start speech tracking for player duration / audio completion
+                OnDialogueResponseStarted(&playerResp);
+
+                // If there is a next response in this topic, advance currentResponse and inform MenuTopicManager
+                if (topicMgr && topicMgr->lastSelectedDialogue && topicMgr->lastSelectedDialogue->currentResponse) {
+                    if (topicMgr->lastSelectedDialogue->currentResponse->next != nullptr) {
+                        topicMgr->waitingToAdvance = true;
+                        topicMgr->lastSelectedDialogue->currentResponse = topicMgr->lastSelectedDialogue->currentResponse->next;
+                        SKSE::log::info("Multi-line topic detected - advanced currentResponse to next line and set waitingToAdvance = true");
+                    } else {
+                        topicMgr->waitingToAdvance = false;
+                        topicMgr->lastSelectedDialogue->currentResponse = nullptr;
                     }
+                }
+
+                // 4. Dispatch sensory playback directly onto PlayerCharacter natively!
+                if (playerResp.useEmotion) {
+                    player->SetEmotionType(playerResp.animFaceArchType.get());
+                    player->SetEmotionValue(playerResp.percent);
+                }
+                _origCharUpdateInDialogue(player, &playerResp, a_unused);
+                AttachSoundHandlesToHead(player);
+
+                // 5. Dispatch silent logical response to puppet (updates MenuTopicManager and subtitle display)
+                bool ret = _origCharUpdateInDialogue(a_speaker, &puppetResp, a_unused);
+
+                // 6. Ensure puppet face and emotion remain strictly neutral
+                if (auto* spkFace = a_speaker->GetFaceGenAnimationData()) {
+                    RE::BSSpinLockGuard locker(spkFace->lock);
+                    spkFace->ClearExpressionOverride();
+                    spkFace->Reset(0.0f, true, false, false, false);
                 }
                 a_speaker->SetEmotionType(RE::EmotionType::kNeutral);
                 a_speaker->SetEmotionValue(0);
 
-                auto* spkProcess = a_speaker->GetActorRuntimeData().currentProcess;
-                if (spkProcess && spkProcess->high) {
-                    for (auto& handle : spkProcess->high->soundHandles) {
-                        if (handle.IsValid()) {
-                            handle.SetVolume(0.0f);
-                            handle.Stop();
-                        }
-                    }
-                }
-
-                // Apply facial emotion and expression directly to player
-                if (a_response->useEmotion) {
-                    player->SetEmotionType(a_response->animFaceArchType.get());
-                    player->SetEmotionValue(a_response->percent);
-                }
-
-                // Play line on player and track speech
-                OnDialogueResponseStarted(a_response);
-
-                // Call Character::UpdateInDialogue on the player. PlayerCharacter's native vtable (0x4C) is an empty stub,
-                // but Character::UpdateInDialogue properly loads LIP files, plays voice audio, and animates player facial phonemes.
-                bool ret = _origCharUpdateInDialogue(player, a_response, a_unused);
-
-                // Attach sound handles to player's head node
-                AttachSoundHandlesToHead(player);
-
-                // Sync any donor updates (packages/aliases) to player
+                // 7. Sync donor updates to player
                 SyncDonorUpdatesToPlayer();
 
                 return ret;
@@ -454,37 +513,14 @@ namespace AlternateActors {
                 return false;
             }
         } else {
-            // Ticks with a_response == nullptr:
-            // Ensure proxy actor stays completely quiet and does not mouth words
-            if (auto* faceData = a_speaker->GetFaceGenAnimationData()) {
-                faceData->ClearExpressionOverride();
-                RE::BSSpinLockGuard locker(faceData->lock);
-                const auto& pkf = faceData->phenomeKeyFrame;
-                if (pkf.values && pkf.count > 0 && pkf.count < 64) {
-                    for (std::uint32_t i = 0; i < pkf.count; ++i) {
-                        pkf.values[i] = 0.0f;
-                    }
-                }
-            }
-
-            auto* spkProcess = a_speaker->GetActorRuntimeData().currentProcess;
-            if (spkProcess && spkProcess->high) {
-                for (auto& handle : spkProcess->high->soundHandles) {
-                    if (handle.IsValid()) {
-                        handle.SetVolume(0.0f);
-                        handle.Stop();
-                    }
-                }
-            }
-
-            // Let proxy actor head-track player as listener
-            _origCharUpdateInDialogue(a_speaker, nullptr, a_unused);
-
-            // Tick player in dialogue using Character::UpdateInDialogue to actively drive lip phonemes and sound handles
+            // Ticks with a_response == nullptr from MenuTopicManager during dialogue:
+            // 1. Keep player's dialogue state and audio emitter updated
             if (_playerSpeaking.load(std::memory_order_relaxed)) {
                 _origCharUpdateInDialogue(player, nullptr, a_unused);
+                AttachSoundHandlesToHead(player);
             }
-            return true;
+            // 2. Allow puppet to tick native UpdateInDialogue so MenuTopicManager stays synchronized
+            return _origCharUpdateInDialogue(a_speaker, nullptr, a_unused);
         }
     }
 
@@ -495,7 +531,7 @@ namespace AlternateActors {
                 auto* puppet = mgr.GetPuppet();
                 auto* donor = mgr.GetDonor();
                 if ((puppet && a_this == puppet) || (donor && a_this == donor)) {
-                    return mgr.RedirectDialogueToPlayer(a_this, a_response, a_unused);
+                    return mgr.HandleProxyDialogueOutput(a_this, a_response, a_unused);
                 }
             }
         }
@@ -533,6 +569,9 @@ namespace AlternateActors {
                 auto* puppet = mgr.GetPuppet();
                 auto* donor = mgr.GetDonor();
                 if ((puppet && a_this == puppet) || (donor && a_this == donor)) {
+                    if (!mgr.IsPlayerSpeaking()) {
+                        return true;
+                    }
                     return mgr.CheckPlayerSpeakingDone();
                 }
             }
@@ -554,14 +593,22 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::Hook_Character_SetSpeakingDone(RE::Actor* a_this, bool a_set) {
-        if (a_this) {
+        if (a_this && a_set) {
             auto& mgr = ImpersonationManager::GetSingleton();
-            if (mgr.IsActive() && !mgr.IsInCompleteSpeaking()) {
+            if (mgr.IsActive()) {
                 auto* puppet = mgr.GetPuppet();
                 auto* donor = mgr.GetDonor();
                 if ((puppet && a_this == puppet) || (donor && a_this == donor)) {
-                    if (a_set) {
-                        mgr.ResetSpeechTracking();
+                    auto* player = mgr.GetPlayer();
+                    if (!player) player = RE::PlayerCharacter::GetSingleton();
+                    if (player) {
+                        player->SetEmotionType(RE::EmotionType::kNeutral);
+                        player->SetEmotionValue(0);
+                        if (auto* faceData = player->GetFaceGenAnimationData()) {
+                            RE::BSSpinLockGuard locker(faceData->lock);
+                            faceData->Reset(0.0f, false, true, false, false);
+                            faceData->ClearExpressionOverride();
+                        }
                     }
                 }
             }
@@ -602,6 +649,7 @@ namespace AlternateActors {
         }
         return _origSetDialogueWithPlayer(a_this, a_flag, a_forceGreet, a_topic);
     }
+
 
     void ImpersonationManager::Hook_Player_UpdateAnimation(RE::Actor* a_this, float a_delta) {
         _origPlayerUpdateAnimation(a_this, a_delta);

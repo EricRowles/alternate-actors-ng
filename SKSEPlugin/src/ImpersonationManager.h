@@ -87,7 +87,7 @@ namespace AlternateActors {
         void CompleteSpeaking(RE::Actor* a_player);
         bool IsInCompleteSpeaking() const { return _inCompleteSpeaking.load(std::memory_order_relaxed); }
         static void AttachSoundHandlesToHead(RE::Actor* a_actor);
-        bool RedirectDialogueToPlayer(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused);
+        bool HandleProxyDialogueOutput(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused);
         void SyncDonorUpdatesToPlayer();
 
     private:
@@ -125,8 +125,8 @@ namespace AlternateActors {
         using SetDialogueWithPlayer_t = bool(RE::Actor*, bool, bool, RE::TESTopicInfo*);
         inline static REL::Relocation<SetDialogueWithPlayer_t> _origSetDialogueWithPlayer;
 
-        static void Hook_Player_UpdateAnimation(RE::Actor* a_this, float a_delta);
         using UpdateAnimation_t = void(RE::Actor*, float);
+        static void Hook_Player_UpdateAnimation(RE::Actor* a_this, float a_delta);
         inline static REL::Relocation<UpdateAnimation_t> _origPlayerUpdateAnimation;
 
         static RE::BGSLocation* Hook_Player_GetEditorLocation1(const RE::TESObjectREFR* a_this);

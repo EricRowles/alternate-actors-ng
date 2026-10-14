@@ -89,6 +89,8 @@ namespace AlternateActors::Papyrus {
     }
 
     bool OpenSelfDialogue(RE::StaticFunctionTag*, RE::Actor* a_speaker) {
+        SKSE::log::info("Papyrus::OpenSelfDialogue called with speaker {:08X}",
+            a_speaker ? static_cast<std::uint32_t>(a_speaker->GetFormID()) : 0);
         return IdleAIManager::GetSingleton().OpenSelfDialogue(a_speaker);
     }
 

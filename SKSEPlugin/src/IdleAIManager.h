@@ -48,6 +48,7 @@ namespace AlternateActors {
         RE::Actor* GetActiveDonorActor() const { return _activeDonorActor.get().get(); }
 
         bool OpenSelfDialogue(RE::Actor* a_speaker = nullptr);
+        bool OpenSelfDialogueDirect(RE::Actor* a_speaker);
         bool TriggerVoiceLine(RE::Actor* a_speaker = nullptr);
 
         bool CheckAndTriggerIdleDialogue();
