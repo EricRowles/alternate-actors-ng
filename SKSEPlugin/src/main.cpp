@@ -53,7 +53,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     SKSE::log::info("{} v{} loading...", plugin->GetName(), plugin->GetVersion().string());
 
     SKSE::Init(a_skse);
-    SKSE::AllocTrampoline(128);
+    SKSE::AllocTrampoline(512);
 
     // Register Papyrus Native functions
     auto* papyrus = SKSE::GetPapyrusInterface();

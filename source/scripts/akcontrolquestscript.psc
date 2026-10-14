@@ -25,9 +25,9 @@ Event OnInit()
 	akmaintenance()
 EndEvent
 
-Event OnPlayerLoadGame()
-	akMaintenance()
-EndEvent
+; Note: Quests do not receive engine OnPlayerLoadGame events; game reloads are
+; forwarded to akmaintenance() via AKControlPlayerScript on the Player alias.
+
 
 ; Maintenance Function -----------------------------------------------------------------------------------
 function akmaintenance()

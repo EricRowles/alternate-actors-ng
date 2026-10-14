@@ -97,6 +97,7 @@ namespace AlternateActors {
         ImpersonationManager& operator=(const ImpersonationManager&) = delete;
 
         void InstallHooks();
+        static void Hook_ForceRefIntoAlias(struct _CONTEXT& a_ctx);
         static RE::BGSVoiceType* Hook_GetObjectVoiceType(const RE::TESNPC* a_this);
         inline static REL::Relocation<decltype(Hook_GetObjectVoiceType)> _origGetObjectVoiceType;
 

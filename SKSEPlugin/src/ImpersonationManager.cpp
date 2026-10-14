@@ -6,6 +6,7 @@
 #include "IdleAIManager.h"
 
 #include <unordered_set>
+#include <SKSE/ContextHook.h>
 #include <RE/C/CommandTable.h>
 #include <RE/T/TESCondition.h>
 #include <RE/T/TESPackage.h>
@@ -690,8 +691,53 @@ namespace AlternateActors {
         return _origPlayerGetEditorLocation2(a_this, a_outPos, a_outRot, a_outWorldOrCell, a_fallback);
     }
 
+    void ImpersonationManager::Hook_ForceRefIntoAlias(CONTEXT& a_ctx) {
+        if (!a_ctx.Rcx || !a_ctx.R8) return;
+
+        auto* quest = reinterpret_cast<RE::TESQuest*>(a_ctx.Rcx);
+        auto aliasID = static_cast<std::uint32_t>(a_ctx.Rdx);
+        auto* targetRef = reinterpret_cast<RE::TESObjectREFR*>(a_ctx.R8);
+
+        auto& mgr = ImpersonationManager::GetSingleton();
+        if (mgr.IsActive() && mgr.GetOptions().aliases) {
+            auto* puppet = mgr.GetPuppet();
+            if (puppet && targetRef == puppet) {
+                if (!AliasManager::IsModInternalQuest(quest)) {
+                    auto* player = RE::PlayerCharacter::GetSingleton();
+                    auto* donor = mgr.GetDonor();
+                    if (player && donor) {
+                        SKSE::log::info("Hook_ForceRefIntoAlias: Intercepted external quest {:08X} assigning alias ID {} to puppet {:08X}. Redirecting to player {:08X} (donor {:08X}).",
+                            static_cast<std::uint32_t>(quest->GetFormID()),
+                            aliasID,
+                            static_cast<std::uint32_t>(puppet->GetFormID()),
+                            static_cast<std::uint32_t>(player->GetFormID()),
+                            static_cast<std::uint32_t>(donor->GetFormID()));
+
+                        if (!AliasManager::GetSingleton().HasRecord(quest->GetFormID(), aliasID)) {
+                            SwappedAliasRecord record;
+                            record.questFormID = quest->GetFormID();
+                            record.aliasID = aliasID;
+                            record.originalActorFormID = donor->GetFormID();
+                            AliasManager::GetSingleton().AddRecord(record);
+                        }
+
+                        a_ctx.R8 = reinterpret_cast<DWORD64>(player);
+                    }
+                }
+            }
+        }
+    }
+
     void ImpersonationManager::InstallHooks() {
         if (_hooksInstalled) return;
+
+        // Hook TESQuest::ForceRefIntoAlias (RELOCATION_ID(24523, 25052)) via context hook
+        auto forceRefAddr = REL::RelocationID(24523, 25052).address();
+        if (SKSE::stl::install_context_hook(forceRefAddr, 5, &Hook_ForceRefIntoAlias, -5)) {
+            SKSE::log::info("Installed TESQuest::ForceRefIntoAlias context hook at {:016X}", forceRefAddr);
+        } else {
+            SKSE::log::error("Failed to install TESQuest::ForceRefIntoAlias context hook!");
+        }
 
         // Hook TESNPC::GetObjectVoiceType on primary vtable (index 0x49)
         REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_TESNPC[0] };

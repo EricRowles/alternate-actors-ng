@@ -21,47 +21,60 @@ int _oid_impersonateAliases
 int _oid_impersonatePackages
 int _oid_impersonateScripts
 
+int function GetVersion()
+	return 3
+endFunction
+
+event OnVersionUpdate(int a_version)
+	ModName = "Alternate Actors NG"
+	Pages = None
+endEvent
+
 event OnConfigInit()
-	Pages = new string[1]
-	Pages[0] = "Options"
+	ModName = "Alternate Actors NG"
+	Pages = None
 
 	AK_NG.SetIdleAIEnabled(IdleAIEnabled)
 	AK_NG.SetIdleAITimeout(IdleAITimeout)
 	AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
 endEvent
 
+function RefreshConfig()
+	OnGameReload()
+endFunction
+
+
 event OnPageReset(string page)
 	SetCursorPosition(0)
-	if (page == "Options")
-		SetCursorFillMode(LEFT_TO_RIGHT)
-		AddTextOption("Mod Version", akquest.akmodversion, OPTION_FLAG_DISABLED)
-		AddTextOption("Status", "Config Active", OPTION_FLAG_DISABLED)
-		AddEmptyOption()
+	SetCursorFillMode(LEFT_TO_RIGHT)
+	AddTextOption("Mod Version", akquest.akmodversion, OPTION_FLAG_DISABLED)
+	AddTextOption("Status", "Config Active", OPTION_FLAG_DISABLED)
+	AddEmptyOption()
 
-		; Left Column: Autonomous AI & Gameplay Settings
-		SetCursorPosition(4)
-		SetCursorFillMode(TOP_TO_BOTTOM)
-		AddHeaderOption("Autonomous AI")
-		_oid_idleAI = AddToggleOption("Idle AI Pathing", IdleAIEnabled)
-		_oid_idleTimeout = AddSliderOption("Idle AI Delay", IdleAITimeout, "{1} s")
+	; Left Column: Autonomous AI & Gameplay Settings
+	SetCursorPosition(4)
+	SetCursorFillMode(TOP_TO_BOTTOM)
+	AddHeaderOption("Autonomous AI")
+	_oid_idleAI = AddToggleOption("Idle AI Pathing", IdleAIEnabled)
+	_oid_idleTimeout = AddSliderOption("Idle AI Delay", IdleAITimeout, "{1} s")
 
-		; Right Column: NPC Impersonation System & Controls
-		SetCursorPosition(5)
-		SetCursorFillMode(TOP_TO_BOTTOM)
-		AddHeaderOption("NPC Impersonation")
-		_oid_impersonateConditions = AddToggleOption("Spoof Conditions", ImpersonateConditions)
-		_oid_impersonateAliases = AddToggleOption("Redirect Quest Aliases", ImpersonateAliases)
-		_oid_impersonatePackages = AddToggleOption("Retarget AI Packages", ImpersonatePackages)
-		_oid_impersonateScripts = AddToggleOption("Redirect Papyrus Scripts", ImpersonateScripts)
-		AddEmptyOption()
+	; Right Column: NPC Impersonation System & Controls
+	SetCursorPosition(5)
+	SetCursorFillMode(TOP_TO_BOTTOM)
+	AddHeaderOption("NPC Impersonation")
+	_oid_impersonateConditions = AddToggleOption("Spoof Conditions", ImpersonateConditions)
+	_oid_impersonateAliases = AddToggleOption("Redirect Quest Aliases", ImpersonateAliases)
+	_oid_impersonatePackages = AddToggleOption("Retarget AI Packages", ImpersonatePackages)
+	_oid_impersonateScripts = AddToggleOption("Redirect Papyrus Scripts", ImpersonateScripts)
+	AddEmptyOption()
 
-		If akquest.Alias_OriginalDonor.GetActorReference()
-			_oid_revert = AddTextOption("Return to Body", "Click to Revert")
-		Else
-			_oid_revert = AddTextOption("Return to Body", "Already in Body", OPTION_FLAG_DISABLED)
-		EndIf
-	endIf
+	If akquest.Alias_OriginalDonor.GetActorReference()
+		_oid_revert = AddTextOption("Return to Body", "Click to Revert")
+	Else
+		_oid_revert = AddTextOption("Return to Body", "Already in Body", OPTION_FLAG_DISABLED)
+	EndIf
 endEvent
+
 
 event OnOptionSelect(int option)
 	if option == _oid_idleAI

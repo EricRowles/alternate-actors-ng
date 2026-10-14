@@ -40,6 +40,9 @@ namespace AlternateActors {
         // sorted by quest priority (highest priority first).
         std::vector<RE::TESPackage*> GetAliasPackages(RE::Actor* a_actor) const;
 
+        // Checks whether a quest is an internal Alternate Actors controller quest
+        static bool IsModInternalQuest(RE::TESQuest* a_quest);
+
     private:
         AliasManager() = default;
         ~AliasManager() = default;
