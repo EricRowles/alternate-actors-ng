@@ -7,22 +7,18 @@ Actor Property PlayerRef Auto
 ; MCM Property Variables
 bool Property IdleAIEnabled = True Auto
 Float Property IdleAITimeout = 5.0 Auto
-bool Property ImpersonateConditions = True Auto
-bool Property ImpersonateAliases = True Auto
-bool Property ImpersonatePackages = True Auto
-bool Property ImpersonateScripts = False Auto
+bool Property NPCVoiceEnabled = True Auto
+bool Property PuppetFollowsPlayer = True Auto
 
 ; Option IDs
 int _oid_idleAI
 int _oid_idleTimeout
+int _oid_npcVoice
+int _oid_puppetFollows
 int _oid_revert
-int _oid_impersonateConditions
-int _oid_impersonateAliases
-int _oid_impersonatePackages
-int _oid_impersonateScripts
 
 int function GetVersion()
-	return 3
+	return 4
 endFunction
 
 event OnVersionUpdate(int a_version)
@@ -36,13 +32,13 @@ event OnConfigInit()
 
 	AK_NG.SetIdleAIEnabled(IdleAIEnabled)
 	AK_NG.SetIdleAITimeout(IdleAITimeout)
-	AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
+	AK_NG.SetNPCVoiceEnabled(NPCVoiceEnabled)
+	AK_NG.SetPuppetFollowsPlayer(PuppetFollowsPlayer)
 endEvent
 
 function RefreshConfig()
 	OnGameReload()
 endFunction
-
 
 event OnPageReset(string page)
 	SetCursorPosition(0)
@@ -58,14 +54,12 @@ event OnPageReset(string page)
 	_oid_idleAI = AddToggleOption("Idle AI Pathing", IdleAIEnabled)
 	_oid_idleTimeout = AddSliderOption("Idle AI Delay", IdleAITimeout, "{1} s")
 
-	; Right Column: NPC Impersonation System & Controls
+	; Right Column: Puppet & Voice Settings
 	SetCursorPosition(5)
 	SetCursorFillMode(TOP_TO_BOTTOM)
-	AddHeaderOption("NPC Impersonation")
-	_oid_impersonateConditions = AddToggleOption("Spoof Conditions", ImpersonateConditions)
-	_oid_impersonateAliases = AddToggleOption("Redirect Quest Aliases", ImpersonateAliases)
-	_oid_impersonatePackages = AddToggleOption("Retarget AI Packages", ImpersonatePackages)
-	_oid_impersonateScripts = AddToggleOption("Redirect Papyrus Scripts", ImpersonateScripts)
+	AddHeaderOption("Impersonation Settings")
+	_oid_npcVoice = AddToggleOption("NPC Voice", NPCVoiceEnabled)
+	_oid_puppetFollows = AddToggleOption("Puppet Follows Player", PuppetFollowsPlayer)
 	AddEmptyOption()
 
 	If akquest.Alias_OriginalDonor.GetActorReference()
@@ -75,28 +69,19 @@ event OnPageReset(string page)
 	EndIf
 endEvent
 
-
 event OnOptionSelect(int option)
 	if option == _oid_idleAI
 		IdleAIEnabled = !IdleAIEnabled
 		SetToggleOptionValue(_oid_idleAI, IdleAIEnabled)
 		AK_NG.SetIdleAIEnabled(IdleAIEnabled)
-	elseif option == _oid_impersonateConditions
-		ImpersonateConditions = !ImpersonateConditions
-		SetToggleOptionValue(_oid_impersonateConditions, ImpersonateConditions)
-		AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
-	elseif option == _oid_impersonateAliases
-		ImpersonateAliases = !ImpersonateAliases
-		SetToggleOptionValue(_oid_impersonateAliases, ImpersonateAliases)
-		AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
-	elseif option == _oid_impersonatePackages
-		ImpersonatePackages = !ImpersonatePackages
-		SetToggleOptionValue(_oid_impersonatePackages, ImpersonatePackages)
-		AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
-	elseif option == _oid_impersonateScripts
-		ImpersonateScripts = !ImpersonateScripts
-		SetToggleOptionValue(_oid_impersonateScripts, ImpersonateScripts)
-		AK_NG.SetImpersonationOptions(ImpersonateConditions, ImpersonateAliases, ImpersonatePackages, ImpersonateScripts)
+	elseif option == _oid_npcVoice
+		NPCVoiceEnabled = !NPCVoiceEnabled
+		SetToggleOptionValue(_oid_npcVoice, NPCVoiceEnabled)
+		AK_NG.SetNPCVoiceEnabled(NPCVoiceEnabled)
+	elseif option == _oid_puppetFollows
+		PuppetFollowsPlayer = !PuppetFollowsPlayer
+		SetToggleOptionValue(_oid_puppetFollows, PuppetFollowsPlayer)
+		AK_NG.SetPuppetFollowsPlayer(PuppetFollowsPlayer)
 	elseif option == _oid_revert
 		if akquest.Alias_OriginalDonor.GetActorReference()
 			SetTextOptionValue(_oid_revert, "Reverting...")
@@ -130,15 +115,11 @@ event OnOptionHighlight(int option)
 		SetInfoText("Enables autonomous AI pathing on your player after a few seconds of inactivity.")
 	elseif option == _oid_idleTimeout
 		SetInfoText("Seconds of player inactivity before autonomous AI pathing begins.")
+	elseif option == _oid_npcVoice
+		SetInfoText("Enables donor NPC voice comments and voice identity on the player while possessed.")
+	elseif option == _oid_puppetFollows
+		SetInfoText("Controls whether the Dragonborn puppet follows you as a teammate.")
 	elseif option == _oid_revert
 		SetInfoText("Immediately return control back to your original character.")
-	elseif option == _oid_impersonateConditions
-		SetInfoText("Allows dialogue and scripted events targeting the donor NPC by ID or reference to recognize you.")
-	elseif option == _oid_impersonateAliases
-		SetInfoText("Redirects running quest aliases pointing to the donor NPC over to the player.")
-	elseif option == _oid_impersonatePackages
-		SetInfoText("Redirects other NPCs' AI packages (follow, escort, approach) to target the player.")
-	elseif option == _oid_impersonateScripts
-		SetInfoText("EXPERIMENTAL: Redirects other mods' Papyrus script properties pointing to the donor over to the player.")
 	endif
 endEvent

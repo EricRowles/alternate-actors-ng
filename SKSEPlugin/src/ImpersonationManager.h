@@ -8,17 +8,10 @@
 namespace AlternateActors {
 
     struct ImpersonationOptions {
-        bool conditions{ true };
-        bool aliases{ true };
-        bool packages{ true };
-        bool scripts{ false };
+        bool npcVoice{ true };
+        bool puppetFollowsPlayer{ true };
     };
 
-    struct PapyrusRedirectRecord {
-        RE::VMHandle holderHandle{ 0 };
-        std::string scriptName;
-        std::uint32_t varIndex{ 0 };
-    };
 
     enum class PackageRetargetType : std::uint8_t {
         kPackLocHandle,
@@ -69,8 +62,15 @@ namespace AlternateActors {
         }
 
         const ImpersonationOptions& GetOptions() const { return _options; }
-        void SetOptions(bool a_conditions, bool a_aliases, bool a_packages, bool a_scripts);
-        bool IsConditionsEnabled() const { return _active.load(std::memory_order_relaxed) && _options.conditions; }
+        bool IsConditionsEnabled() const { return _active.load(std::memory_order_relaxed); }
+
+        void SetNPCVoiceEnabled(bool a_enabled) { _options.npcVoice = a_enabled; }
+        bool IsNPCVoiceEnabled() const { return _options.npcVoice; }
+
+
+        void SetPuppetFollowsPlayer(bool a_follows);
+        bool DoesPuppetFollowPlayer() const { return _options.puppetFollowsPlayer; }
+
 
         void Save(SKSE::SerializationInterface* a_serde);
         void Load(SKSE::SerializationInterface* a_serde, std::uint32_t a_version, std::uint32_t a_length);
@@ -161,9 +161,6 @@ namespace AlternateActors {
             PackageRetargetType a_handleType,
             PackageRetargetType a_objType);
 
-        void RedirectPapyrusProperties(RE::Actor* a_donor, RE::Actor* a_player);
-        void RestorePapyrusProperties(RE::Actor* a_donor, RE::Actor* a_player);
-
         std::atomic<bool> _active{ false };
         std::atomic<RE::Actor*> _donorActor{ nullptr };
         std::atomic<RE::Actor*> _playerActor{ nullptr };
@@ -185,8 +182,9 @@ namespace AlternateActors {
 
         ImpersonationOptions _options;
         std::vector<PackageRetargetRecord> _retargetedPackages;
-        std::vector<PapyrusRedirectRecord> _papyrusRedirects;
         bool _hooksInstalled{ false };
     };
+
+
 
 }

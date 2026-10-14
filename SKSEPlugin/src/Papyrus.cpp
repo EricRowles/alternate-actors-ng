@@ -131,13 +131,18 @@ namespace AlternateActors::Papyrus {
         return ImpersonationManager::GetSingleton().End();
     }
 
-    void SetImpersonationOptions(RE::StaticFunctionTag*, bool a_conditions, bool a_aliases, bool a_packages, bool a_scripts) {
-        ImpersonationManager::GetSingleton().SetOptions(a_conditions, a_aliases, a_packages, a_scripts);
+    void SetNPCVoiceEnabled(RE::StaticFunctionTag*, bool a_enabled) {
+        ImpersonationManager::GetSingleton().SetNPCVoiceEnabled(a_enabled);
+    }
+
+    void SetPuppetFollowsPlayer(RE::StaticFunctionTag*, bool a_follows) {
+        ImpersonationManager::GetSingleton().SetPuppetFollowsPlayer(a_follows);
     }
 
     void SetPuppetActor(RE::StaticFunctionTag*, RE::Actor* a_puppet) {
         ImpersonationManager::GetSingleton().SetPuppet(a_puppet);
     }
+
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -168,9 +173,11 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("GetActorSex", className, GetActorSex);
         a_vm->RegisterFunction("BeginImpersonation", className, BeginImpersonation);
         a_vm->RegisterFunction("EndImpersonation", className, EndImpersonation);
-        a_vm->RegisterFunction("SetImpersonationOptions", className, SetImpersonationOptions);
+        a_vm->RegisterFunction("SetNPCVoiceEnabled", className, SetNPCVoiceEnabled);
+        a_vm->RegisterFunction("SetPuppetFollowsPlayer", className, SetPuppetFollowsPlayer);
         a_vm->RegisterFunction("SetPuppetActor", className, SetPuppetActor);
         a_vm->RegisterFunction("GetOriginalPlayerName", className, GetOriginalPlayerName);
+
 
         SKSE::log::info("Registered AK_NG Papyrus functions.");
         return true;

@@ -54,10 +54,13 @@ namespace AlternateActors {
             if constexpr (ID == 426) {
                 auto* targetVoice = static_cast<RE::TESForm*>(a_p1);
                 if (targetVoice && mgr.GetDonorVoiceType() && targetVoice == mgr.GetDonorVoiceType()) {
-                    a_result = 1.0;
-                    return true;
+                    if (isPuppetSelf || mgr.IsNPCVoiceEnabled()) {
+                        a_result = 1.0;
+                        return true;
+                    }
                 }
             }
+
 
             if (donor) {
                 double donorRes = 0.0;
@@ -128,8 +131,12 @@ namespace AlternateActors {
             if (mgr.IsActive() && mgr._donorVoiceType) {
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 if (player && a_this == player->GetActorBase()) {
-                    return mgr._donorVoiceType;
+                    if (mgr.IsNPCVoiceEnabled()) {
+                        return mgr._donorVoiceType;
+                    }
+                    return _origGetObjectVoiceType(a_this);
                 }
+
                 auto* puppet = mgr.GetPuppet();
                 if (puppet && a_this == puppet->GetActorBase()) {
                     if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
@@ -337,13 +344,11 @@ namespace AlternateActors {
         if (!donor || !player) return;
 
         // 1. Sync any updated aliases
-        if (_options.aliases) {
-            AliasManager::GetSingleton().SwapAliasesToPlayer(donor, player);
-        }
+        AliasManager::GetSingleton().SwapAliasesToPlayer(donor, player);
 
         // 2. Sync AI packages from donor to player base
-        if (_options.packages) {
-            auto* donorBase = donor->GetActorBase();
+        auto* donorBase = donor->GetActorBase();
+
             auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
             if (donorBase && playerBase) {
                 std::vector<RE::TESPackage*> donorPkgs;
@@ -403,7 +408,6 @@ namespace AlternateActors {
                     SKSE::log::info("Synchronized updated donor AI packages to player.");
                 }
             }
-        }
     }
 
     bool ImpersonationManager::HandleProxyDialogueOutput(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused) {
@@ -699,7 +703,7 @@ namespace AlternateActors {
         auto* targetRef = reinterpret_cast<RE::TESObjectREFR*>(a_ctx.R8);
 
         auto& mgr = ImpersonationManager::GetSingleton();
-        if (mgr.IsActive() && mgr.GetOptions().aliases) {
+        if (mgr.IsActive()) {
             auto* puppet = mgr.GetPuppet();
             if (puppet && targetRef == puppet) {
                 if (!AliasManager::IsModInternalQuest(quest)) {
@@ -799,36 +803,6 @@ namespace AlternateActors {
         InstallHooks();
     }
 
-    void ImpersonationManager::SetOptions(bool a_conditions, bool a_aliases, bool a_packages, bool a_scripts) {
-        bool hadPackages = _options.packages;
-        bool hadScripts = _options.scripts;
-        _options.conditions = a_conditions;
-        _options.aliases = a_aliases;
-        _options.packages = a_packages;
-        _options.scripts = a_scripts;
-
-        SKSE::log::info("Updated Impersonation Options: Conditions={}, Aliases={}, Packages={}, Scripts={}",
-            a_conditions, a_aliases, a_packages, a_scripts);
-
-        if (_active.load(std::memory_order_relaxed)) {
-            auto* donor = _donorActor.load(std::memory_order_relaxed);
-            auto* player = _playerActor.load(std::memory_order_relaxed);
-            if (donor && player) {
-                if (!hadPackages && a_packages) {
-                    RetargetPackages(donor, player);
-                } else if (hadPackages && !a_packages) {
-                    RestorePackages();
-                }
-
-                if (!hadScripts && a_scripts) {
-                    RedirectPapyrusProperties(donor, player);
-                } else if (hadScripts && !a_scripts) {
-                    RestorePapyrusProperties(donor, player);
-                }
-            }
-        }
-    }
-
     std::int32_t ImpersonationManager::Begin(RE::Actor* a_donor, RE::Actor* a_player) {
         if (!a_donor || !a_player) {
             SKSE::log::warn("ImpersonationManager::Begin called with null actor!");
@@ -865,19 +839,10 @@ namespace AlternateActors {
         );
 
         // Layer 2: Quest Aliases
-        if (_options.aliases) {
-            AliasManager::GetSingleton().SwapAliasesToPlayer(a_donor, a_player);
-        }
+        AliasManager::GetSingleton().SwapAliasesToPlayer(a_donor, a_player);
 
         // Layer 3: AI Packages
-        if (_options.packages) {
-            RetargetPackages(a_donor, a_player);
-        }
-
-        // Layer 4: Papyrus Properties
-        if (_options.scripts) {
-            RedirectPapyrusProperties(a_donor, a_player);
-        }
+        RetargetPackages(a_donor, a_player);
 
         return 1;
     }
@@ -894,18 +859,12 @@ namespace AlternateActors {
             donor ? static_cast<std::uint32_t>(donor->GetFormID()) : static_cast<std::uint32_t>(_savedDonorFormID)
         );
 
-        // Layer 4: Papyrus Properties
-        if (_options.scripts) {
-            RestorePapyrusProperties(donor, player);
-        }
-
         // Layer 3: AI Packages
         RestorePackages();
 
         // Layer 2: Quest Aliases
-        if (_options.aliases) {
-            AliasManager::GetSingleton().RestoreAliases();
-        }
+        AliasManager::GetSingleton().RestoreAliases();
+
 
         _active.store(false, std::memory_order_release);
         _donorActor.store(nullptr, std::memory_order_relaxed);
@@ -939,8 +898,12 @@ namespace AlternateActors {
             FaceManager::GetSingleton().RestoreOriginalPuppetAppearance(a_puppet);
         }
 
-        // 1. Set PlayerTeammate flag so puppet follows player, draws weapons, and assists in combat
-        a_puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+        // 1. Set PlayerTeammate flag if puppet follows player
+        if (_options.puppetFollowsPlayer) {
+            a_puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+        } else {
+            a_puppet->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kPlayerTeammate);
+        }
 
         // 2. Clear combat, allow dialogue, and evaluate package immediately
         a_puppet->AllowPCDialogue(true);
@@ -948,9 +911,23 @@ namespace AlternateActors {
         a_puppet->StopCombat();
         a_puppet->EvaluatePackage(true, true);
 
-        SKSE::log::info("Configured puppet {:08X} as active player follower.",
-            static_cast<std::uint32_t>(a_puppet->GetFormID()));
+        SKSE::log::info("Configured puppet {:08X} (followsPlayer={}).",
+            static_cast<std::uint32_t>(a_puppet->GetFormID()), _options.puppetFollowsPlayer);
     }
+
+    void ImpersonationManager::SetPuppetFollowsPlayer(bool a_follows) {
+        _options.puppetFollowsPlayer = a_follows;
+        if (auto* puppet = GetPuppet()) {
+            if (a_follows) {
+                puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+            } else {
+                puppet->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kPlayerTeammate);
+            }
+            puppet->EvaluatePackage(true, true);
+            SKSE::log::info("Updated puppet follows player: {}", a_follows);
+        }
+    }
+
 
     void ImpersonationManager::Tick() {
         if (_playerSpeaking.load(std::memory_order_relaxed)) {
@@ -1128,134 +1105,6 @@ namespace AlternateActors {
         _retargetedPackages.clear();
     }
 
-    // --- Layer 4: Papyrus Properties Redirection ---
-    static bool IsOurScript(std::string_view name) {
-        auto startsWithNoCase = [](std::string_view str, std::string_view prefix) {
-            if (str.size() < prefix.size()) return false;
-            return _strnicmp(str.data(), prefix.data(), prefix.size()) == 0;
-        };
-        return startsWithNoCase(name, "akc") ||
-               startsWithNoCase(name, "akcontrol") ||
-               startsWithNoCase(name, "ak_ng");
-    }
-
-    void ImpersonationManager::RedirectPapyrusProperties(RE::Actor* a_donor, RE::Actor* a_player) {
-        if (!a_donor || !a_player) return;
-
-        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        if (!vm) return;
-        auto* policy = vm->GetObjectHandlePolicy();
-        if (!policy) return;
-
-        auto donorHandle = policy->GetHandleForObject(RE::Actor::FORMTYPE, a_donor);
-        auto playerHandle = policy->GetHandleForObject(RE::Actor::FORMTYPE, a_player);
-
-        struct Candidate {
-            RE::VMHandle holderHandle;
-            std::string scriptName;
-            std::uint32_t varIndex;
-        };
-        std::vector<Candidate> candidates;
-
-        {
-            RE::BSSpinLockGuard locker(vm->attachedScriptsLock);
-            for (const auto& [holderHandle, scriptArray] : vm->attachedScripts) {
-                if (holderHandle == donorHandle || holderHandle == playerHandle) {
-                    continue;
-                }
-
-                for (auto& attached : scriptArray) {
-                    auto objPtr = attached.get();
-                    if (!objPtr || !objPtr->IsConstructed() || !objPtr->IsValid()) {
-                        continue;
-                    }
-
-                    auto* typeInfo = objPtr->GetTypeInfo();
-                    if (!typeInfo) continue;
-
-                    const char* scriptName = typeInfo->GetName();
-                    if (!scriptName || IsOurScript(scriptName)) {
-                        continue;
-                    }
-
-                    std::uint32_t totalVars = typeInfo->GetTotalNumVariables();
-                    for (std::uint32_t i = 0; i < totalVars; ++i) {
-                        auto& var = objPtr->variables[i];
-                        if (var.IsObject()) {
-                            auto targetObj = var.GetObject();
-                            if (!targetObj) continue;
-
-                            auto targetHandle = targetObj->GetHandle();
-                            auto* resolved = policy->GetObjectForHandle(RE::Actor::FORMTYPE, targetHandle);
-                            if (resolved == a_donor) {
-                                auto* targetType = targetObj->GetTypeInfo();
-                                if (targetType) {
-                                    const char* tn = targetType->GetName();
-                                    if (tn && (_stricmp(tn, "Actor") == 0 ||
-                                               _stricmp(tn, "ObjectReference") == 0 ||
-                                               _stricmp(tn, "Form") == 0)) {
-                                        candidates.push_back({ holderHandle, scriptName, i });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for (const auto& cand : candidates) {
-            RE::BSTSmartPointer<RE::BSScript::Object> boundObj;
-            if (vm->FindBoundObject(cand.holderHandle, cand.scriptName.c_str(), boundObj) && boundObj) {
-                auto* typeInfo = boundObj->GetTypeInfo();
-                if (typeInfo && cand.varIndex < typeInfo->GetTotalNumVariables()) {
-                    auto& var = boundObj->variables[cand.varIndex];
-                    var.Pack(a_player);
-                    _papyrusRedirects.push_back({ cand.holderHandle, cand.scriptName, cand.varIndex });
-                }
-            }
-        }
-
-        SKSE::log::info("Redirected {} Papyrus script properties from donor to player.", _papyrusRedirects.size());
-    }
-
-    void ImpersonationManager::RestorePapyrusProperties(RE::Actor* a_donor, RE::Actor* a_player) {
-        if (_papyrusRedirects.empty() || !a_donor) {
-            _papyrusRedirects.clear();
-            return;
-        }
-
-        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        if (!vm) {
-            _papyrusRedirects.clear();
-            return;
-        }
-        auto* policy = vm->GetObjectHandlePolicy();
-
-        for (const auto& rec : _papyrusRedirects) {
-            RE::BSTSmartPointer<RE::BSScript::Object> boundObj;
-            if (vm->FindBoundObject(rec.holderHandle, rec.scriptName.c_str(), boundObj) && boundObj) {
-                auto* typeInfo = boundObj->GetTypeInfo();
-                if (typeInfo && rec.varIndex < typeInfo->GetTotalNumVariables()) {
-                    auto& var = boundObj->variables[rec.varIndex];
-                    if (var.IsObject()) {
-                        auto targetObj = var.GetObject();
-                        if (targetObj && policy) {
-                            auto targetHandle = targetObj->GetHandle();
-                            auto* resolved = policy->GetObjectForHandle(RE::Actor::FORMTYPE, targetHandle);
-                            if (resolved == a_player) {
-                                var.Pack(a_donor);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        SKSE::log::info("Restored {} redirected Papyrus script properties back to donor.", _papyrusRedirects.size());
-        _papyrusRedirects.clear();
-    }
-
     // --- Co-Save Serialization ---
     void ImpersonationManager::Save(SKSE::SerializationInterface* a_serde) {
         if (!a_serde) return;
@@ -1271,55 +1120,31 @@ namespace AlternateActors {
             puppetID = puppet->GetFormID();
         }
 
-        std::uint32_t optMask = 0;
-        if (_options.conditions) optMask |= (1 << 0);
-        if (_options.aliases) optMask |= (1 << 1);
-        if (_options.packages) optMask |= (1 << 2);
-        if (_options.scripts) optMask |= (1 << 3);
-
         if (a_serde->OpenRecord(Serialization::kImpersonationDataRecord, Serialization::kSerializationVersion)) {
             a_serde->WriteRecordData(&active, sizeof(active));
             a_serde->WriteRecordData(&donorID, sizeof(donorID));
             a_serde->WriteRecordData(&puppetID, sizeof(puppetID));
-            a_serde->WriteRecordData(&optMask, sizeof(optMask));
-
-            std::uint32_t redirectCount = static_cast<std::uint32_t>(_papyrusRedirects.size());
-            a_serde->WriteRecordData(&redirectCount, sizeof(redirectCount));
-            for (const auto& r : _papyrusRedirects) {
-                a_serde->WriteRecordData(&r.holderHandle, sizeof(r.holderHandle));
-                std::uint16_t nameLen = static_cast<std::uint16_t>(r.scriptName.size());
-                a_serde->WriteRecordData(&nameLen, sizeof(nameLen));
-                a_serde->WriteRecordData(r.scriptName.data(), nameLen);
-                a_serde->WriteRecordData(&r.varIndex, sizeof(r.varIndex));
-            }
+            a_serde->WriteRecordData(&_options.npcVoice, sizeof(_options.npcVoice));
+            a_serde->WriteRecordData(&_options.puppetFollowsPlayer, sizeof(_options.puppetFollowsPlayer));
         }
     }
 
-    void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t a_version, std::uint32_t a_length) {
+    void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t /*a_version*/, std::uint32_t a_length) {
         if (!a_serde) return;
 
         bool active = false;
         RE::FormID donorID = 0;
         RE::FormID puppetID = 0;
-        std::uint32_t optMask = 0;
 
-        if (a_length < (sizeof(active) + sizeof(donorID) + sizeof(optMask))) {
+        if (a_length < (sizeof(active) + sizeof(donorID) + sizeof(puppetID) + sizeof(_options.npcVoice) + sizeof(_options.puppetFollowsPlayer))) {
             return;
         }
 
         a_serde->ReadRecordData(&active, sizeof(active));
         a_serde->ReadRecordData(&donorID, sizeof(donorID));
-
-        if (a_version >= 2 || a_length >= (sizeof(active) + sizeof(donorID) + sizeof(puppetID) + sizeof(optMask))) {
-            a_serde->ReadRecordData(&puppetID, sizeof(puppetID));
-        }
-
-        a_serde->ReadRecordData(&optMask, sizeof(optMask));
-
-        _options.conditions = (optMask & (1 << 0)) != 0;
-        _options.aliases = (optMask & (1 << 1)) != 0;
-        _options.packages = (optMask & (1 << 2)) != 0;
-        _options.scripts = (optMask & (1 << 3)) != 0;
+        a_serde->ReadRecordData(&puppetID, sizeof(puppetID));
+        a_serde->ReadRecordData(&_options.npcVoice, sizeof(_options.npcVoice));
+        a_serde->ReadRecordData(&_options.puppetFollowsPlayer, sizeof(_options.puppetFollowsPlayer));
 
         if (a_serde->ResolveFormID(donorID, donorID)) {
             _savedDonorFormID = donorID;
@@ -1330,28 +1155,6 @@ namespace AlternateActors {
                 if (auto* puppet = RE::TESForm::LookupByID<RE::Actor>(puppetID)) {
                     _puppetHandle = puppet->GetHandle();
                     SKSE::log::info("Restored puppet {:08X} from co-save.", static_cast<std::uint32_t>(puppetID));
-                }
-            }
-        }
-
-        std::uint32_t redirectCount = 0;
-        if (a_serde->ReadRecordData(&redirectCount, sizeof(redirectCount))) {
-            _papyrusRedirects.clear();
-            for (std::uint32_t i = 0; i < redirectCount; ++i) {
-                RE::VMHandle oldHandle = 0;
-                a_serde->ReadRecordData(&oldHandle, sizeof(oldHandle));
-                std::uint16_t nameLen = 0;
-                a_serde->ReadRecordData(&nameLen, sizeof(nameLen));
-                std::string scriptName(nameLen, '\0');
-                if (nameLen > 0) {
-                    a_serde->ReadRecordData(scriptName.data(), nameLen);
-                }
-                std::uint32_t varIndex = 0;
-                a_serde->ReadRecordData(&varIndex, sizeof(varIndex));
-
-                RE::VMHandle newHandle = 0;
-                if (a_serde->ResolveHandle(oldHandle, newHandle)) {
-                    _papyrusRedirects.push_back({ newHandle, scriptName, varIndex });
                 }
             }
         }
@@ -1379,7 +1182,6 @@ namespace AlternateActors {
 
     void ImpersonationManager::OnRevert() {
         RestorePackages();
-        _papyrusRedirects.clear();
         _active.store(false, std::memory_order_release);
         _donorActor.store(nullptr, std::memory_order_relaxed);
         _playerActor.store(nullptr, std::memory_order_relaxed);
@@ -1397,9 +1199,10 @@ namespace AlternateActors {
         if (_active.load(std::memory_order_relaxed)) {
             auto* donor = _donorActor.load(std::memory_order_relaxed);
             auto* player = _playerActor.load(std::memory_order_relaxed);
-            if (donor && player && _options.packages) {
+            if (donor && player) {
                 RetargetPackages(donor, player);
             }
+
             if (donor) {
                 if (auto* base = donor->GetActorBase()) {
                     _donorVoiceType = GetNPCVoiceType(base);

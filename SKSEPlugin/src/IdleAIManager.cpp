@@ -365,7 +365,12 @@ namespace AlternateActors {
             return false;
         }
 
+        if (!impMgr.IsNPCVoiceEnabled()) {
+            return false;
+        }
+
         auto* player = RE::PlayerCharacter::GetSingleton();
+
         if (!player) return false;
 
         auto* donor = impMgr.GetDonor();

@@ -70,12 +70,16 @@ Int Function BeginImpersonation(Actor akDonor, Actor akPlayer) Global Native
 ; Ends active impersonation and restores original targets and properties.
 Int Function EndImpersonation() Global Native
 
-; Configures which impersonation layers are active (Conditions, Aliases, Packages, Scripts).
-Function SetImpersonationOptions(Bool abConditions, Bool abAliases, Bool abPackages, Bool abScripts) Global Native
+; Enables or disables donor NPC voice comments and voice identity on the player.
+Function SetNPCVoiceEnabled(Bool abEnabled) Global Native
+
+; Sets whether the Dragonborn puppet follows the player as a teammate.
+Function SetPuppetFollowsPlayer(Bool abFollows) Global Native
 
 ; Registers the active puppet actor holding the player's true appearance/identity.
 Function SetPuppetActor(Actor akPuppet) Global Native
 
 ; Returns the player's true original character name.
 String Function GetOriginalPlayerName() Global Native
+
 
