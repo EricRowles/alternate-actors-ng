@@ -907,7 +907,6 @@ namespace AlternateActors {
         _donorVoiceType = nullptr;
         _donorName.clear();
         _origPlayerName.clear();
-        SetPuppet(nullptr);
 
         return 1;
     }
@@ -944,6 +943,12 @@ namespace AlternateActors {
         }
 
         // Apply original player name to puppet display
+        if (_origPlayerName.empty()) {
+            if (FaceManager::GetSingleton().HasSavedAppearance() &&
+                !FaceManager::GetSingleton().GetSavedAppearance().fullName.empty()) {
+                _origPlayerName = FaceManager::GetSingleton().GetSavedAppearance().fullName.c_str();
+            }
+        }
         if (!_origPlayerName.empty()) {
             if (auto* base = a_puppet->GetActorBase()) {
                 base->fullName = _origPlayerName.c_str();

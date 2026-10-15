@@ -100,6 +100,9 @@ namespace AlternateActors::Papyrus {
 
     std::int32_t GetActorSex(RE::StaticFunctionTag*, RE::Actor* a_actor) {
         if (!a_actor) return 0;
+        if (a_actor->IsPlayerRef() && FaceManager::GetSingleton().HasSavedAppearance()) {
+            return static_cast<std::int32_t>(FaceManager::GetSingleton().GetSavedAppearance().sex);
+        }
         auto* base = a_actor->GetActorBase();
         if (!base) return 0;
         return static_cast<std::int32_t>(base->GetSex());

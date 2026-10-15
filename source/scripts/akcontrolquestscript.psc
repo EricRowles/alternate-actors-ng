@@ -76,12 +76,16 @@ function AKMorphComplete(Actor akdonor, Actor akimposter)
 	Game.FadeOutGame(true, true, 0.0, 0.3)
 	
 	; Dynamically select male or female puppet based on the player's gender
-	if AK_NG.GetActorSex(PlayerRef) == 0
-		Alias_PlayerPuppet.ForceRefTo(akcontroltempmale)
-	Else
-		Alias_PlayerPuppet.ForceRefTo(akcontroltempfemale)
+	Actor currentPuppet = Alias_PlayerPuppet.GetActorReference()
+	If !currentPuppet
+		if AK_NG.GetActorSex(PlayerRef) == 0
+			Alias_PlayerPuppet.ForceRefTo(akcontroltempmale)
+		Else
+			Alias_PlayerPuppet.ForceRefTo(akcontroltempfemale)
+		EndIf
+		currentPuppet = Alias_PlayerPuppet.GetActorReference()
 	EndIf
-	PlayerPuppetRef = Alias_PlayerPuppet.GetActorReference()
+	PlayerPuppetRef = currentPuppet
 	AK_NG.SetPuppetActor(PlayerPuppetRef)
 
 	; Transfer traits from PC back to orignpc before getting new traits if we were already controlling an NPC
@@ -111,6 +115,7 @@ function AKMorphComplete(Actor akdonor, Actor akimposter)
 	akdonor.moveto(AKControlCloneMarker)
 	PlayerPuppetRef.SetDisplayName(origPlayerName, True)
 	PlayerPuppetRef.BlockActivation(True)
+	AK_NG.SetPuppetActor(PlayerPuppetRef)
 	
 	PlayerRef.addspell(akcontrolrevertspell, False) 
 	
