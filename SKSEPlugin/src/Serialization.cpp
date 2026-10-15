@@ -182,11 +182,13 @@ namespace AlternateActors::Serialization {
             std::int32_t unusedHotkey{ 0 };
             RE::FormID donorID = IdleAIManager::GetSingleton().GetActiveDonorActor() ?
                 IdleAIManager::GetSingleton().GetActiveDonorActor()->GetFormID() : 0;
+            bool combatAIEnabled = IdleAIManager::GetSingleton().IsCombatAIEnabled();
 
             a_serde->WriteRecordData(&enabled, sizeof(enabled));
             a_serde->WriteRecordData(&timeout, sizeof(timeout));
             a_serde->WriteRecordData(&unusedHotkey, sizeof(unusedHotkey));
             a_serde->WriteRecordData(&donorID, sizeof(donorID));
+            a_serde->WriteRecordData(&combatAIEnabled, sizeof(combatAIEnabled));
         }
 
         // 7. Save Impersonation State
@@ -430,6 +432,7 @@ namespace AlternateActors::Serialization {
                     float timeout = 10.0f;
                     std::int32_t unusedHotkey{ 0 };
                     RE::FormID donorID = 0;
+                    bool combatAIEnabled = true;
 
                     a_serde->ReadRecordData(&enabled, sizeof(enabled));
                     a_serde->ReadRecordData(&timeout, sizeof(timeout));
@@ -441,10 +444,14 @@ namespace AlternateActors::Serialization {
                             IdleAIManager::GetSingleton().SetActiveDonorActor(donor);
                         }
                     }
+                    if (length >= (sizeof(enabled) + sizeof(timeout) + sizeof(unusedHotkey) + sizeof(donorID) + sizeof(combatAIEnabled))) {
+                        a_serde->ReadRecordData(&combatAIEnabled, sizeof(combatAIEnabled));
+                    }
 
                     IdleAIManager::GetSingleton().SetIdleAIEnabled(enabled);
                     IdleAIManager::GetSingleton().SetIdleTimeout(timeout);
-                    SKSE::log::info("Loaded Idle AI state from co-save.");
+                    IdleAIManager::GetSingleton().SetCombatAIEnabled(combatAIEnabled);
+                    SKSE::log::info("Loaded Idle AI state from co-save (combatAIEnabled={}).", combatAIEnabled);
                     break;
                 }
 

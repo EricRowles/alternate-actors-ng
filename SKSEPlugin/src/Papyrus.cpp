@@ -76,6 +76,10 @@ namespace AlternateActors::Papyrus {
         IdleAIManager::GetSingleton().SetIdleAIEnabled(a_enabled);
     }
 
+    void SetCombatAIEnabled(RE::StaticFunctionTag*, bool a_enabled) {
+        IdleAIManager::GetSingleton().SetCombatAIEnabled(a_enabled);
+    }
+
     void SetIdleAITimeout(RE::StaticFunctionTag*, float a_seconds) {
         IdleAIManager::GetSingleton().SetIdleTimeout(a_seconds);
     }
@@ -168,6 +172,7 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("ApplyDonorProfile", className, ApplyDonorProfile);
         a_vm->RegisterFunction("RestorePlayerProfile", className, RestorePlayerProfile);
         a_vm->RegisterFunction("SetIdleAIEnabled", className, SetIdleAIEnabled);
+        a_vm->RegisterFunction("SetCombatAIEnabled", className, SetCombatAIEnabled);
         a_vm->RegisterFunction("SetIdleAITimeout", className, SetIdleAITimeout);
         a_vm->RegisterFunction("SetControllingNPC", className, SetControllingNPC);
         a_vm->RegisterFunction("UpdateIdleAI", className, UpdateIdleAI);

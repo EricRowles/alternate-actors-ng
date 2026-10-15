@@ -7,23 +7,27 @@ Actor Property PlayerRef Auto
 ; MCM Property Variables
 bool Property IdleAIEnabled = True Auto
 Float Property IdleAITimeout = 5.0 Auto
+bool Property CombatAIEnabled = True Auto
 bool Property NPCVoiceEnabled = True Auto
 bool Property PuppetFollowsPlayer = True Auto
 
 ; Option IDs
 int _oid_idleAI
 int _oid_idleTimeout
+int _oid_combatAI
 int _oid_npcVoice
 int _oid_puppetFollows
 int _oid_revert
 
 int function GetVersion()
-	return 4
+	return 5
 endFunction
 
 event OnVersionUpdate(int a_version)
 	ModName = "Alternate Actors NG"
 	Pages = None
+
+	AK_NG.SetCombatAIEnabled(CombatAIEnabled)
 endEvent
 
 event OnConfigInit()
@@ -32,6 +36,7 @@ event OnConfigInit()
 
 	AK_NG.SetIdleAIEnabled(IdleAIEnabled)
 	AK_NG.SetIdleAITimeout(IdleAITimeout)
+	AK_NG.SetCombatAIEnabled(CombatAIEnabled)
 	AK_NG.SetNPCVoiceEnabled(NPCVoiceEnabled)
 	AK_NG.SetPuppetFollowsPlayer(PuppetFollowsPlayer)
 endEvent
@@ -53,6 +58,7 @@ event OnPageReset(string page)
 	AddHeaderOption("Autonomous AI")
 	_oid_idleAI = AddToggleOption("Idle AI Pathing", IdleAIEnabled)
 	_oid_idleTimeout = AddSliderOption("Idle AI Delay", IdleAITimeout, "{1} s")
+	_oid_combatAI = AddToggleOption("Autonomous Combat AI", CombatAIEnabled)
 
 	; Right Column: Puppet & Voice Settings
 	SetCursorPosition(5)
@@ -74,6 +80,10 @@ event OnOptionSelect(int option)
 		IdleAIEnabled = !IdleAIEnabled
 		SetToggleOptionValue(_oid_idleAI, IdleAIEnabled)
 		AK_NG.SetIdleAIEnabled(IdleAIEnabled)
+	elseif option == _oid_combatAI
+		CombatAIEnabled = !CombatAIEnabled
+		SetToggleOptionValue(_oid_combatAI, CombatAIEnabled)
+		AK_NG.SetCombatAIEnabled(CombatAIEnabled)
 	elseif option == _oid_npcVoice
 		NPCVoiceEnabled = !NPCVoiceEnabled
 		SetToggleOptionValue(_oid_npcVoice, NPCVoiceEnabled)
@@ -115,6 +125,8 @@ event OnOptionHighlight(int option)
 		SetInfoText("Enables autonomous AI pathing on your player after a few seconds of inactivity.")
 	elseif option == _oid_idleTimeout
 		SetInfoText("Seconds of player inactivity before autonomous AI pathing begins.")
+	elseif option == _oid_combatAI
+		SetInfoText("Enables autonomous combat AI (attacking, blocking, distance closing) while idle in combat.")
 	elseif option == _oid_npcVoice
 		SetInfoText("Enables donor NPC voice comments and voice identity on the player while possessed.")
 	elseif option == _oid_puppetFollows

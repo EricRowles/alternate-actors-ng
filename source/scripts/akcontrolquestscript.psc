@@ -44,6 +44,7 @@ function akmaintenance()
 	; Synchronize SKSE Native settings from MCM properties on game load
 	AK_NG.SetIdleAIEnabled(akquestmcm.IdleAIEnabled)
 	AK_NG.SetIdleAITimeout(akquestmcm.IdleAITimeout)
+	AK_NG.SetCombatAIEnabled(akquestmcm.CombatAIEnabled)
 	AK_NG.SetNPCVoiceEnabled(akquestmcm.NPCVoiceEnabled)
 	AK_NG.SetPuppetFollowsPlayer(akquestmcm.PuppetFollowsPlayer)
 

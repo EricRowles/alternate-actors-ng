@@ -46,6 +46,9 @@ Bool Function RestorePlayerProfile(Actor akPlayer, Actor akDonor = None, Actor a
 ; Enables or disables autonomous idle AI pathing on the player when inactive.
 Function SetIdleAIEnabled(Bool abEnabled) Global Native
 
+; Enables or disables autonomous combat AI processing on the player while idle in combat.
+Function SetCombatAIEnabled(Bool abEnabled) Global Native
+
 ; Sets the idle timeout in seconds before autonomous AI pathing begins (default 10.0s).
 Function SetIdleAITimeout(Float afSeconds) Global Native
 

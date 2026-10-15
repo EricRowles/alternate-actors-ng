@@ -14,6 +14,7 @@
 #include "RE/C/CombatController.h"
 #include "RE/E/ExtraScale.h"
 #include "RE/E/ExtraTextDisplayData.h"
+#include "RE/E/ExtraCombatStyle.h"
 
 namespace AlternateActors {
 
@@ -139,7 +140,12 @@ namespace AlternateActors {
 
         // AI & Combat Profile Capture
         a_outSnapshot.npcClass = npc->npcClass;
-        a_outSnapshot.combatStyle = npc->combatStyle;
+        auto* extraStyle = a_actor->extraList.GetByType<RE::ExtraCombatStyle>();
+        if (extraStyle && extraStyle->combatStyle) {
+            a_outSnapshot.combatStyle = extraStyle->combatStyle;
+        } else {
+            a_outSnapshot.combatStyle = npc->combatStyle;
+        }
         a_outSnapshot.defaultPackList = npc->defaultPackList;
         a_outSnapshot.aiData = npc->aiData;
 
@@ -290,6 +296,12 @@ namespace AlternateActors {
         // 7. AI Behavior & Combat Profile Transfer
         targetNPC->npcClass = a_snapshot.npcClass;
         targetNPC->combatStyle = a_snapshot.combatStyle;
+        if (a_snapshot.combatStyle) {
+            auto* extraStyle = a_targetActor->extraList.GetByType<RE::ExtraCombatStyle>();
+            if (extraStyle) {
+                extraStyle->combatStyle = a_snapshot.combatStyle;
+            }
+        }
         auto& runtime = a_targetActor->GetActorRuntimeData();
         if (runtime.combatController) {
             runtime.combatController->combatStyle = a_snapshot.combatStyle;
