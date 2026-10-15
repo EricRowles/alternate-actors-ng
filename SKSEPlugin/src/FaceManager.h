@@ -13,6 +13,7 @@ namespace AlternateActors {
         RE::BGSTextureSet* faceDetails{ nullptr };
         RE::Color bodyTintColor{};
         float height{ 1.0f };
+        float scale{ 1.0f };
         float weight{ 50.0f };
         RE::SEX sex{ RE::SEX::kNone };
         RE::BSFixedString fullName;
@@ -80,6 +81,10 @@ namespace AlternateActors {
         void SetDonorAppearance(const FaceSnapshot& a_snapshot) { _donorAppearance = a_snapshot; _hasDonorAppearance = true; }
         void ClearDonorAppearance() { _hasDonorAppearance = false; }
 
+        bool NeedsPuppetPost3DUpdate() const { return _puppetNeedsPost3DUpdate; }
+        void SetPuppetNeedsPost3DUpdate(bool a_needs) { _puppetNeedsPost3DUpdate = a_needs; }
+        void ApplyPuppetPost3DLighting(RE::Actor* a_puppet);
+
     private:
         FaceManager() = default;
         ~FaceManager() = default;
@@ -90,6 +95,7 @@ namespace AlternateActors {
         bool _hasSavedAppearance{ false };
         FaceSnapshot _donorAppearance;
         bool _hasDonorAppearance{ false };
+        bool _puppetNeedsPost3DUpdate{ false };
     };
 
 }

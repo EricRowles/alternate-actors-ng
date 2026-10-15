@@ -11,6 +11,9 @@
 #include "RE/B/BSLightingShaderMaterialBase.h"
 #include "RE/B/BSLightingShaderMaterialHairTint.h"
 #include "RE/B/BSLightingShaderMaterialFacegenTint.h"
+#include "RE/C/CombatController.h"
+#include "RE/E/ExtraScale.h"
+#include "RE/E/ExtraTextDisplayData.h"
 
 namespace AlternateActors {
 
@@ -29,8 +32,17 @@ namespace AlternateActors {
         } else {
             a_outSnapshot.faceNPC = (npc->faceNPC && npc->faceNPC != npc) ? npc->faceNPC : npc;
         }
-        a_outSnapshot.fullName = npc->GetFullName();
+        const char* dispName = a_actor->GetDisplayFullName();
+        if (dispName && dispName[0] != '\0') {
+            a_outSnapshot.fullName = dispName;
+        } else {
+            a_outSnapshot.fullName = npc->GetFullName();
+        }
         a_outSnapshot.height = npc->height;
+
+        auto* extraScale = a_actor->extraList.GetByType<RE::ExtraScale>();
+        a_outSnapshot.scale = extraScale ? extraScale->scale : 1.0f;
+
         a_outSnapshot.weight = npc->weight;
         a_outSnapshot.sex = npc->GetSex();
         a_outSnapshot.bodyTintColor = npc->bodyTintColor;
@@ -166,6 +178,13 @@ namespace AlternateActors {
 
         if (!a_snapshot.fullName.empty()) {
             targetNPC->fullName = a_snapshot.fullName;
+            auto* textData = a_targetActor->extraList.GetByType<RE::ExtraTextDisplayData>();
+            if (!textData) {
+                textData = new RE::ExtraTextDisplayData(a_snapshot.fullName.c_str());
+                a_targetActor->extraList.Add(textData);
+            } else {
+                textData->SetName(a_snapshot.fullName.c_str());
+            }
         }
 
         // 2. Sex & Voice Type
@@ -179,6 +198,7 @@ namespace AlternateActors {
 
         // 3. Body scales & tint
         targetNPC->height = a_snapshot.height;
+        a_targetActor->SetScale(a_snapshot.scale);
         targetNPC->weight = a_snapshot.weight;
         targetNPC->bodyTintColor = a_snapshot.bodyTintColor;
 
@@ -270,6 +290,10 @@ namespace AlternateActors {
         // 7. AI Behavior & Combat Profile Transfer
         targetNPC->npcClass = a_snapshot.npcClass;
         targetNPC->combatStyle = a_snapshot.combatStyle;
+        auto& runtime = a_targetActor->GetActorRuntimeData();
+        if (runtime.combatController) {
+            runtime.combatController->combatStyle = a_snapshot.combatStyle;
+        }
         targetNPC->defaultPackList = a_snapshot.defaultPackList;
         targetNPC->aiData = a_snapshot.aiData;
 
@@ -365,6 +389,10 @@ namespace AlternateActors {
         }
 
         if (hasSkinTint) {
+            targetNPC->bodyTintColor.red = static_cast<std::uint8_t>(std::clamp(skinTint.red * 255.0f, 0.0f, 255.0f));
+            targetNPC->bodyTintColor.green = static_cast<std::uint8_t>(std::clamp(skinTint.green * 255.0f, 0.0f, 255.0f));
+            targetNPC->bodyTintColor.blue = static_cast<std::uint8_t>(std::clamp(skinTint.blue * 255.0f, 0.0f, 255.0f));
+
             auto* targetFace = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
             if (targetFace) {
                 RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
@@ -378,6 +406,10 @@ namespace AlternateActors {
                     return RE::BSVisit::BSVisitControl::kContinue;
                 });
             }
+        }
+
+        if (isPuppet) {
+            _puppetNeedsPost3DUpdate = true;
         }
 
         // Soft matte lighting to prevent metallic face reflections
@@ -507,6 +539,74 @@ namespace AlternateActors {
         SKSE::log::info("Restoring original Dragonborn appearance onto puppet actor {:08X}",
             static_cast<std::uint32_t>(a_puppet->GetFormID()));
         return ApplySnapshot(a_puppet, _savedOriginalAppearance);
+    }
+
+    void FaceManager::ApplyPuppetPost3DLighting(RE::Actor* a_puppet) {
+        if (!a_puppet) return;
+
+        auto* puppet3D = a_puppet->Get3D();
+        if (!puppet3D) return;
+
+        auto* targetFace = a_puppet->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
+        if (!targetFace) return;
+
+        if (_savedOriginalAppearance.hasHairTintColor) {
+            auto* targetHair = a_puppet->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kHair);
+            if (targetHair) {
+                RE::BSVisit::TraverseScenegraphGeometries(targetHair, [&](RE::BSGeometry* geom) {
+                    if (geom) {
+                        if (auto* shaderProp = geom->lightingShaderProp_cast()) {
+                            if (auto* hairMat = skyrim_cast<RE::BSLightingShaderMaterialHairTint*>(shaderProp->material)) {
+                                hairMat->tintColor = _savedOriginalAppearance.hairTintColor;
+                            }
+                        }
+                    }
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
+            }
+        }
+
+        RE::NiColor skinTint;
+        bool hasSkinTint = false;
+        if (_savedOriginalAppearance.hasSkinTintColor) {
+            skinTint = _savedOriginalAppearance.skinTintColor;
+            hasSkinTint = true;
+        } else if (_savedOriginalAppearance.bodyTintColor.red != 0 || _savedOriginalAppearance.bodyTintColor.green != 0 || _savedOriginalAppearance.bodyTintColor.blue != 0) {
+            skinTint.red = static_cast<float>(_savedOriginalAppearance.bodyTintColor.red) / 255.0f;
+            skinTint.green = static_cast<float>(_savedOriginalAppearance.bodyTintColor.green) / 255.0f;
+            skinTint.blue = static_cast<float>(_savedOriginalAppearance.bodyTintColor.blue) / 255.0f;
+            hasSkinTint = true;
+        }
+
+        if (hasSkinTint) {
+            RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
+                if (geom) {
+                    if (auto* shaderProp = geom->lightingShaderProp_cast()) {
+                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                            faceMat->tintColor = skinTint;
+                        }
+                    }
+                }
+                return RE::BSVisit::BSVisitControl::kContinue;
+            });
+        }
+
+        RE::BSVisit::TraverseScenegraphGeometries(puppet3D, [](RE::BSGeometry* geom) {
+            if (geom) {
+                if (auto* shaderProp = geom->lightingShaderProp_cast()) {
+                    if (auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(shaderProp->material)) {
+                        mat->specularColorScale = 0.20f;
+                        mat->specularPower = 10.0f;
+                        mat->subSurfaceLightRolloff = 0.6f;
+                    }
+                }
+            }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+
+        _puppetNeedsPost3DUpdate = false;
+        SKSE::log::info("Applied post-3D skin, hair, and soft matte lighting to puppet {:08X}",
+            static_cast<std::uint32_t>(a_puppet->GetFormID()));
     }
 
 }

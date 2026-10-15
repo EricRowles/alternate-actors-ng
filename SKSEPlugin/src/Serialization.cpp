@@ -43,6 +43,7 @@ namespace AlternateActors::Serialization {
         a_serde->WriteRecordData(&voiceTypeID, sizeof(voiceTypeID));
         a_serde->WriteRecordData(&a_face.bodyTintColor, sizeof(a_face.bodyTintColor));
         a_serde->WriteRecordData(&a_face.height, sizeof(a_face.height));
+        a_serde->WriteRecordData(&a_face.scale, sizeof(a_face.scale));
         a_serde->WriteRecordData(&a_face.weight, sizeof(a_face.weight));
 
         std::uint8_t sexVal = static_cast<std::uint8_t>(a_face.sex);
@@ -87,6 +88,14 @@ namespace AlternateActors::Serialization {
         a_serde->WriteRecordData(&a_face.skinTintColor.red, sizeof(a_face.skinTintColor.red));
         a_serde->WriteRecordData(&a_face.skinTintColor.green, sizeof(a_face.skinTintColor.green));
         a_serde->WriteRecordData(&a_face.skinTintColor.blue, sizeof(a_face.skinTintColor.blue));
+
+        // Full name
+        std::string nameStr(a_face.fullName.c_str());
+        std::uint32_t nameLen = static_cast<std::uint32_t>(nameStr.size());
+        a_serde->WriteRecordData(&nameLen, sizeof(nameLen));
+        if (nameLen > 0) {
+            a_serde->WriteRecordData(nameStr.data(), nameLen);
+        }
     }
 
     void SaveCallback(SKSE::SerializationInterface* a_serde) {
@@ -196,6 +205,7 @@ namespace AlternateActors::Serialization {
         a_serde->ReadRecordData(&voiceTypeID, sizeof(voiceTypeID));
         a_serde->ReadRecordData(&a_outFace.bodyTintColor, sizeof(a_outFace.bodyTintColor));
         a_serde->ReadRecordData(&a_outFace.height, sizeof(a_outFace.height));
+        a_serde->ReadRecordData(&a_outFace.scale, sizeof(a_outFace.scale));
         a_serde->ReadRecordData(&a_outFace.weight, sizeof(a_outFace.weight));
 
         std::uint8_t sexVal = 0;
@@ -281,6 +291,14 @@ namespace AlternateActors::Serialization {
             a_serde->ReadRecordData(&a_outFace.skinTintColor.red, sizeof(a_outFace.skinTintColor.red));
             a_serde->ReadRecordData(&a_outFace.skinTintColor.green, sizeof(a_outFace.skinTintColor.green));
             a_serde->ReadRecordData(&a_outFace.skinTintColor.blue, sizeof(a_outFace.skinTintColor.blue));
+        }
+
+        std::uint32_t nameLen = 0;
+        if (a_serde->ReadRecordData(&nameLen, sizeof(nameLen)) && nameLen > 0) {
+            std::string nameStr(nameLen, '\0');
+            if (a_serde->ReadRecordData(nameStr.data(), nameLen)) {
+                a_outFace.fullName = nameStr.c_str();
+            }
         }
 
         return true;

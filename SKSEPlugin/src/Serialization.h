@@ -4,7 +4,7 @@
 
 namespace AlternateActors::Serialization {
 
-    inline constexpr std::uint32_t kSerializationVersion = 2;
+    inline constexpr std::uint32_t kSerializationVersion = 3;
 
     inline constexpr std::uint32_t kAliasDataRecord = 'ALIS';
     inline constexpr std::uint32_t kFaceDataRecord = 'FACE';

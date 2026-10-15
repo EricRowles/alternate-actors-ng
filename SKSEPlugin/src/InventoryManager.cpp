@@ -2,6 +2,7 @@
 #include "InventoryManager.h"
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 
 namespace AlternateActors {
 
@@ -170,6 +171,14 @@ namespace AlternateActors {
         // 3. Transfer and equip items
         auto fromInv = a_fromActor->GetInventory();
         auto* equipMgr = RE::ActorEquipManager::GetSingleton();
+        std::unordered_set<RE::TESBoundObject*> wornObjects;
+        for (const auto& [boundObj, entryPair] : fromInv) {
+            const auto& entryData = entryPair.second;
+            if (boundObj && entryData && entryData->IsWorn()) {
+                wornObjects.insert(boundObj);
+            }
+        }
+
         std::int32_t itemsTransferred = 0;
         for (const auto& [boundObj, entryPair] : fromInv) {
             std::int32_t count = entryPair.first;
@@ -182,6 +191,26 @@ namespace AlternateActors {
                 equipMgr->EquipObject(a_toActor, boundObj, nullptr, count, nullptr, false, a_forceEquip, false, true);
             } else {
                 a_fromActor->RemoveItem(boundObj, count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_toActor);
+            }
+            itemsTransferred++;
+        }
+
+        // If target is an NPC (such as the puppet), Skyrim's native AddObjectToContainer
+        // automatically equips armor pieces found in inventory even if they were NOT worn on the source actor.
+        // We explicitly scan and unequip any items that were not in the source actor's worn list.
+        if (!a_toActor->IsPlayerRef()) {
+            auto toInvAfter = a_toActor->GetInventory();
+            for (const auto& [boundObj, entryPair] : toInvAfter) {
+                const auto& entryData = entryPair.second;
+                if (boundObj && entryData && entryData->IsWorn()) {
+                    if (wornObjects.find(boundObj) == wornObjects.end()) {
+                        equipMgr->UnequipObject(a_toActor, boundObj, nullptr, 1, nullptr, false, true, false, true);
+                        SKSE::log::info("Unequipped auto-equipped un-worn item {:08X} from NPC {:08X}",
+                            static_cast<std::uint32_t>(boundObj->GetFormID()),
+                            static_cast<std::uint32_t>(a_toActor->GetFormID())
+                        );
+                    }
+                }
             }
         }
         

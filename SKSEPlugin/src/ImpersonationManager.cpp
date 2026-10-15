@@ -6,6 +6,7 @@
 #include "IdleAIManager.h"
 
 #include <unordered_set>
+#include <RE/E/ExtraTextDisplayData.h>
 #include <SKSE/ContextHook.h>
 #include <RE/C/CommandTable.h>
 #include <RE/T/TESCondition.h>
@@ -819,12 +820,30 @@ namespace AlternateActors {
         _donorHandle = a_donor->GetHandle();
         _savedDonorFormID = a_donor->GetFormID();
         _donorName = a_donor->GetName();
+        const char* dispName = a_player->GetDisplayFullName();
         if (FaceManager::GetSingleton().HasSavedAppearance() &&
             !FaceManager::GetSingleton().GetSavedAppearance().fullName.empty()) {
             _origPlayerName = FaceManager::GetSingleton().GetSavedAppearance().fullName.c_str();
+        } else if (dispName && dispName[0] != '\0') {
+            _origPlayerName = dispName;
         } else {
             _origPlayerName = a_player->GetName();
         }
+
+        // Apply donor name onto player display
+        if (!_donorName.empty()) {
+            if (auto* base = a_player->GetActorBase()) {
+                base->fullName = _donorName.c_str();
+            }
+            auto* textData = a_player->extraList.GetByType<RE::ExtraTextDisplayData>();
+            if (!textData) {
+                textData = new RE::ExtraTextDisplayData(_donorName.c_str());
+                a_player->extraList.Add(textData);
+            } else {
+                textData->SetName(_donorName.c_str());
+            }
+        }
+
         if (auto* base = a_donor->GetActorBase()) {
             _donorVoiceType = GetNPCVoiceType(base);
         } else {
@@ -865,6 +884,19 @@ namespace AlternateActors {
         // Layer 2: Quest Aliases
         AliasManager::GetSingleton().RestoreAliases();
 
+        // Restore player's original name
+        if (player && !_origPlayerName.empty()) {
+            if (auto* base = player->GetActorBase()) {
+                base->fullName = _origPlayerName.c_str();
+            }
+            auto* textData = player->extraList.GetByType<RE::ExtraTextDisplayData>();
+            if (!textData) {
+                textData = new RE::ExtraTextDisplayData(_origPlayerName.c_str());
+                player->extraList.Add(textData);
+            } else {
+                textData->SetName(_origPlayerName.c_str());
+            }
+        }
 
         _active.store(false, std::memory_order_release);
         _donorActor.store(nullptr, std::memory_order_relaxed);
@@ -893,9 +925,36 @@ namespace AlternateActors {
             base->faceNPC = nullptr;
         }
 
+        // Ensure saved appearance exists before configuring puppet on initial possession
+        if (!FaceManager::GetSingleton().HasSavedAppearance()) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player) {
+                FaceSnapshot origPlayerSnapshot;
+                if (FaceManager::GetSingleton().CaptureSnapshot(player, origPlayerSnapshot)) {
+                    origPlayerSnapshot.faceNPC = nullptr;
+                    FaceManager::GetSingleton().SetSavedAppearance(origPlayerSnapshot);
+                    SKSE::log::info("SetPuppet: captured original player appearance for puppet restoration.");
+                }
+            }
+        }
+
         // Restore original Dragonborn appearance onto puppet if saved appearance exists
         if (FaceManager::GetSingleton().HasSavedAppearance()) {
             FaceManager::GetSingleton().RestoreOriginalPuppetAppearance(a_puppet);
+        }
+
+        // Apply original player name to puppet display
+        if (!_origPlayerName.empty()) {
+            if (auto* base = a_puppet->GetActorBase()) {
+                base->fullName = _origPlayerName.c_str();
+            }
+            auto* textData = a_puppet->extraList.GetByType<RE::ExtraTextDisplayData>();
+            if (!textData) {
+                textData = new RE::ExtraTextDisplayData(_origPlayerName.c_str());
+                a_puppet->extraList.Add(textData);
+            } else {
+                textData->SetName(_origPlayerName.c_str());
+            }
         }
 
         // 1. Set PlayerTeammate flag if puppet follows player
@@ -932,6 +991,30 @@ namespace AlternateActors {
     void ImpersonationManager::Tick() {
         if (_playerSpeaking.load(std::memory_order_relaxed)) {
             CheckPlayerSpeakingDone();
+        }
+
+        if (FaceManager::GetSingleton().NeedsPuppetPost3DUpdate()) {
+            if (auto* puppet = GetPuppet()) {
+                FaceManager::GetSingleton().ApplyPuppetPost3DLighting(puppet);
+            }
+        }
+
+        // Check if player has an active dialogue/force-greet package targeting puppet
+        if (IdleAIManager::GetSingleton().IsAIActive()) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* puppet = GetPuppet();
+            if (player && puppet) {
+                auto* curPkg = player->GetCurrentPackage();
+                if (curPkg && curPkg->packTarg) {
+                    if (curPkg->packTarg->target.handle == puppet->GetHandle() || curPkg->packTarg->target.object == puppet) {
+                        float dist = player->GetDistance(puppet, false, false);
+                        if (dist <= 250.0f) {
+                            SKSE::log::info("Player force-greet package reached puppet target (dist: {:.1f}) - opening self-dialogue.", dist);
+                            IdleAIManager::GetSingleton().OpenSelfDialogue(puppet);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -995,6 +1078,10 @@ namespace AlternateActors {
         auto* donorActorBase = a_donor->GetActorBase();
         auto* playerBase = a_player->GetBaseObject();
 
+        auto* puppet = GetPuppet();
+        auto puppetHandle = puppet ? puppet->GetHandle() : RE::ActorHandle();
+        auto* puppetBase = puppet ? puppet->GetBaseObject() : nullptr;
+
         if (a_targ->targType == 0) { // Specific Reference
             if (a_targ->target.handle == donorHandle || a_targ->target.object == a_donor) {
                 PackageRetargetRecord rec;
@@ -1006,6 +1093,18 @@ namespace AlternateActors {
                 _retargetedPackages.push_back(rec);
 
                 a_targ->target.handle = playerHandle;
+            } else if (puppet && (a_targ->target.handle == playerHandle || a_targ->target.object == a_player || a_targ->target.object == playerBase)) {
+                PackageRetargetRecord rec;
+                rec.package = a_pkg;
+                rec.type = a_handleType;
+                rec.targetPtr = a_targ;
+                rec.origHandle = a_targ->target.handle;
+                rec.origObject = a_targ->target.object;
+                _retargetedPackages.push_back(rec);
+
+                a_targ->target.handle = puppetHandle;
+                SKSE::log::info("Retargeted player-targeting package {:08X} to puppet {:08X}",
+                    a_pkg->GetFormID(), puppet->GetFormID());
             }
         } else if (a_targ->targType == 1) { // ObjectID
             if (a_targ->target.object == donorBase || a_targ->target.object == donorActorBase || a_targ->target.object == a_donor) {
@@ -1018,6 +1117,18 @@ namespace AlternateActors {
                 _retargetedPackages.push_back(rec);
 
                 a_targ->target.object = playerBase;
+            } else if (puppet && puppetBase && (a_targ->target.object == playerBase || a_targ->target.object == a_player)) {
+                PackageRetargetRecord rec;
+                rec.package = a_pkg;
+                rec.type = a_objType;
+                rec.targetPtr = a_targ;
+                rec.origHandle = a_targ->target.handle;
+                rec.origObject = a_targ->target.object;
+                _retargetedPackages.push_back(rec);
+
+                a_targ->target.object = puppetBase;
+                SKSE::log::info("Retargeted player-targeting object package {:08X} to puppet {:08X}",
+                    a_pkg->GetFormID(), puppet->GetFormID());
             }
         }
     }
