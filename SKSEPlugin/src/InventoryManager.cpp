@@ -154,7 +154,7 @@ namespace AlternateActors {
         RE::SpellItem* rightSpell = nullptr;
         RE::TESShout* shout = nullptr;
 
-        // 1. Clear the target's inventory
+        // 1. Clear the target's non-quest inventory
         auto toInv = a_toActor->GetInventory();
         for (const auto& [boundObj, entryPair] : toInv) {
             std::int32_t count = entryPair.first;
@@ -170,70 +170,122 @@ namespace AlternateActors {
         leftSpell = skyrim_cast<RE::SpellItem*>(fromRuntime.selectedSpells[RE::Actor::SlotTypes::kLeftHand]);
         rightSpell = skyrim_cast<RE::SpellItem*>(fromRuntime.selectedSpells[RE::Actor::SlotTypes::kRightHand]);
         shout = skyrim_cast<RE::TESShout*>(fromRuntime.selectedPower);
-        
 
-        // 3. Transfer and equip items
+        // 3. Identify worn items and their equipped slots (left hand vs main) before transfer
         auto fromInv = a_fromActor->GetInventory();
         auto* equipMgr = RE::ActorEquipManager::GetSingleton();
+        auto* defaultObjMgr = RE::BGSDefaultObjectManager::GetSingleton();
+        auto* leftSlot = defaultObjMgr ? defaultObjMgr->GetObject<RE::BGSEquipSlot>(RE::BGSDefaultObjectManager::DefaultObject::kLeftHandEquip) : nullptr;
+
+        struct WornItemRecord {
+            RE::TESBoundObject* object{ nullptr };
+            bool isLeft{ false };
+        };
+        std::vector<WornItemRecord> wornRecords;
         std::unordered_set<RE::TESBoundObject*> wornObjects;
+
         for (const auto& [boundObj, entryPair] : fromInv) {
             const auto& entryData = entryPair.second;
-            if (boundObj && entryData && entryData->IsWorn()) {
+            if (!boundObj || !entryData) continue;
+            if (entryData->IsWorn()) {
                 wornObjects.insert(boundObj);
+                bool foundLeft = false;
+                bool foundRight = false;
+                if (entryData->extraLists) {
+                    for (auto* xList : *entryData->extraLists) {
+                        if (!xList) continue;
+                        if (xList->HasType(RE::ExtraDataType::kWornLeft)) {
+                            wornRecords.push_back({ boundObj, true });
+                            foundLeft = true;
+                        } else if (xList->HasType(RE::ExtraDataType::kWorn)) {
+                            wornRecords.push_back({ boundObj, false });
+                            foundRight = true;
+                        }
+                    }
+                }
+                if (!foundLeft && !foundRight) {
+                    wornRecords.push_back({ boundObj, false });
+                }
             }
         }
 
+        // 4. Transfer items
         std::int32_t itemsTransferred = 0;
         for (const auto& [boundObj, entryPair] : fromInv) {
             std::int32_t count = entryPair.first;
             const auto& entryData = entryPair.second;
             if (!boundObj || count <= 0) continue;
-            if (entryData && entryData->IsQuestObject()) continue;
 
-            if (entryData && entryData->IsWorn()) {
-                a_fromActor->RemoveItem(boundObj, count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_toActor);
-                equipMgr->EquipObject(a_toActor, boundObj, nullptr, count, nullptr, false, a_forceEquip, false, true);
-            } else {
-                a_fromActor->RemoveItem(boundObj, count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_toActor);
+            bool isQuest = entryData && entryData->IsQuestObject();
+            if (isQuest) {
+                if (a_fromActor->IsPlayerRef() && !a_toActor->IsPlayerRef()) {
+                    // Player to follower or donor:
+                    // Only transfer quest item if it was a donor quest item previously transferred
+                    if (_transferredDonorQuestItems.find(boundObj->GetFormID()) == _transferredDonorQuestItems.end()) {
+                        continue; // Keep player's own quest object on player
+                    }
+                    _transferredDonorQuestItems.erase(boundObj->GetFormID());
+                } else if (!a_fromActor->IsPlayerRef() && a_toActor->IsPlayerRef()) {
+                    // Donor to player:
+                    _transferredDonorQuestItems.insert(boundObj->GetFormID());
+                }
             }
+
+            a_fromActor->RemoveItem(boundObj, count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_toActor);
             itemsTransferred++;
         }
 
-        // If target is an NPC (such as the puppet), Skyrim's native AddObjectToContainer
+        // 5. Re-equip worn items on target actor with proper ExtraData and slot assignment
+        auto toInvAfter = a_toActor->GetInventory();
+        for (const auto& wornRec : wornRecords) {
+            auto it = toInvAfter.find(wornRec.object);
+            if (it != toInvAfter.end() && it->second.first > 0) {
+                auto& toEntry = it->second.second;
+                RE::ExtraDataList* xList = nullptr;
+                if (toEntry && toEntry->extraLists && !toEntry->extraLists->empty()) {
+                    for (auto* x : *toEntry->extraLists) {
+                        if (x && !x->HasType(RE::ExtraDataType::kWorn) && !x->HasType(RE::ExtraDataType::kWornLeft)) {
+                            xList = x;
+                            break;
+                        }
+                    }
+                    if (!xList) {
+                        xList = toEntry->extraLists->front();
+                    }
+                }
+                const RE::BGSEquipSlot* slot = wornRec.isLeft ? leftSlot : nullptr;
+                std::uint32_t equipCount = wornRec.object->Is(RE::FormType::Ammo) ? static_cast<std::uint32_t>(it->second.first) : 1;
+                equipMgr->EquipObject(a_toActor, wornRec.object, xList, equipCount, slot, false, a_forceEquip, false, true);
+            }
+        }
+
+        // 6. If target is an NPC (such as puppet), Skyrim's native AddObjectToContainer
         // automatically equips armor pieces found in inventory even if they were NOT worn on the source actor.
-        // We explicitly scan and unequip any items that were not in the source actor's worn list.
+        // Unequip any items that were not in the source actor's worn list.
         if (!a_toActor->IsPlayerRef()) {
-            auto toInvAfter = a_toActor->GetInventory();
-            for (const auto& [boundObj, entryPair] : toInvAfter) {
+            auto toInvFinal = a_toActor->GetInventory();
+            for (const auto& [boundObj, entryPair] : toInvFinal) {
                 const auto& entryData = entryPair.second;
                 if (boundObj && entryData && entryData->IsWorn()) {
                     if (wornObjects.find(boundObj) == wornObjects.end()) {
                         equipMgr->UnequipObject(a_toActor, boundObj, nullptr, 1, nullptr, false, true, false, true);
-                        SKSE::log::info("Unequipped auto-equipped un-worn item {:08X} from NPC {:08X}",
-                            static_cast<std::uint32_t>(boundObj->GetFormID()),
-                            static_cast<std::uint32_t>(a_toActor->GetFormID())
-                        );
                     }
                 }
             }
         }
-        
-        // 4. Re-equip spells
-        auto* defaultObjMgr = RE::BGSDefaultObjectManager::GetSingleton();
-        if (defaultObjMgr) {
-            auto* leftSlot = defaultObjMgr->GetObject<RE::BGSEquipSlot>(RE::BGSDefaultObjectManager::DefaultObject::kLeftHandEquip);
-            auto* rightSlot = defaultObjMgr->GetObject<RE::BGSEquipSlot>(RE::BGSDefaultObjectManager::DefaultObject::kRightHandEquip);
 
+        // 7. Re-equip spells if target is the player
+        if (a_toActor->IsPlayerRef() && defaultObjMgr) {
+            auto* rightSlot = defaultObjMgr->GetObject<RE::BGSEquipSlot>(RE::BGSDefaultObjectManager::DefaultObject::kRightHandEquip);
             if (leftSpell && leftSlot) {
                 equipMgr->EquipSpell(a_toActor, leftSpell, leftSlot);
             }
             if (rightSpell && rightSlot) {
                 equipMgr->EquipSpell(a_toActor, rightSpell, rightSlot);
             }
-        }
-
-        if (shout) {
-            equipMgr->EquipShout(a_toActor, shout);
+            if (shout) {
+                equipMgr->EquipShout(a_toActor, shout);
+            }
         }
 
         SKSE::log::info("Transferred {} item stacks from {:08X} to {:08X}.",
@@ -248,10 +300,16 @@ namespace AlternateActors {
 
     bool InventoryManager::StoreAndTransferToPlayer(RE::Actor* a_player, RE::Actor* a_donor, RE::Actor* a_storageFollower) {
         if (!a_player || !a_donor) return false;
-        
-        if (a_storageFollower) {
 
-            // Transfer items to storage follower
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+
+        // Save player's equipped spells and shout before morphing
+        auto& pRuntime = a_player->GetActorRuntimeData();
+        _savedPlayerLeftSpell = skyrim_cast<RE::SpellItem*>(pRuntime.selectedSpells[RE::Actor::SlotTypes::kLeftHand]);
+        _savedPlayerRightSpell = skyrim_cast<RE::SpellItem*>(pRuntime.selectedSpells[RE::Actor::SlotTypes::kRightHand]);
+        _savedPlayerShout = skyrim_cast<RE::TESShout*>(pRuntime.selectedPower);
+
+        if (a_storageFollower) {
             TransferAllItems(a_player, a_storageFollower, true);
             SKSE::log::info("Stored player gear in DragonbornFollower ({:08X}).",
                 static_cast<std::uint32_t>(a_storageFollower->GetFormID()));
@@ -272,6 +330,7 @@ namespace AlternateActors {
     bool InventoryManager::RestoreAndTransferFromPlayer(RE::Actor* a_player, RE::Actor* a_donor, RE::Actor* a_storageFollower) {
         if (!a_player) return false;
 
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         auto* equipMgr = RE::ActorEquipManager::GetSingleton();
 
         // 1. Return items from player to donor (if donor is valid)
@@ -285,9 +344,30 @@ namespace AlternateActors {
         // 3. Restore player's original dynamic spells
         RestorePlayerDynamicSpells(a_player);
 
+        // 4. Return player's original items from follower to player
         if (a_storageFollower) {
             TransferAllItems(a_storageFollower, a_player, false);
         }
+
+        // 5. Restore player's original equipped spells and shout
+        auto* defaultObjMgr = RE::BGSDefaultObjectManager::GetSingleton();
+        if (defaultObjMgr && equipMgr) {
+            auto* leftSlot = defaultObjMgr->GetObject<RE::BGSEquipSlot>(RE::BGSDefaultObjectManager::DefaultObject::kLeftHandEquip);
+            auto* rightSlot = defaultObjMgr->GetObject<RE::BGSEquipSlot>(RE::BGSDefaultObjectManager::DefaultObject::kRightHandEquip);
+            if (_savedPlayerLeftSpell && leftSlot) {
+                equipMgr->EquipSpell(a_player, _savedPlayerLeftSpell, leftSlot);
+            }
+            if (_savedPlayerRightSpell && rightSlot) {
+                equipMgr->EquipSpell(a_player, _savedPlayerRightSpell, rightSlot);
+            }
+            if (_savedPlayerShout) {
+                equipMgr->EquipShout(a_player, _savedPlayerShout);
+            }
+        }
+        _savedPlayerLeftSpell = nullptr;
+        _savedPlayerRightSpell = nullptr;
+        _savedPlayerShout = nullptr;
+        _transferredDonorQuestItems.clear();
 
         return true;
     }

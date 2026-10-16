@@ -59,14 +59,9 @@ namespace AlternateActors {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (launchData->shooter == player) {
             if (IdleAIManager::GetSingleton().IsCombatAIActive() || IdleAIManager::GetSingleton().IsBowDrawn()) {
-                auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
-                auto* donor = IdleAIManager::GetSingleton().GetActiveDonorActor();
-                auto* substitute = puppet ? static_cast<RE::TESObjectREFR*>(puppet) : static_cast<RE::TESObjectREFR*>(donor);
-                if (substitute) {
-                    launchData->shooter = substitute;
-                    SKSE::log::info("Hook_Projectile_Launch: Substituted player with {:08X} to bypass player draw-timer override.",
-                        substitute->GetFormID());
-                }
+                // Ensure autonomous combat AI projectile has full draw power without altering the shooter
+                // (preserving player kill attribution, quest progression, XP, and proper collision)
+                launchData->power = 1.0f;
             }
         }
     }
@@ -548,8 +543,8 @@ namespace AlternateActors {
         auto* puppet = impMgr.GetPuppet();
         auto* targetRef = puppet ? static_cast<RE::TESObjectREFR*>(puppet) : static_cast<RE::TESObjectREFR*>(player);
 
-        // Skip if player is currently speaking
-        if (impMgr.IsPlayerSpeaking()) {
+        // Skip if player is currently speaking or in active self-dialogue
+        if (impMgr.IsPlayerSpeaking() || IsInSelfDialogue()) {
             return false;
         }
 

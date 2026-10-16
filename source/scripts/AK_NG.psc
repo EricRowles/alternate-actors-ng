@@ -88,4 +88,8 @@ Function SetPuppetActor(Actor akPuppet) Global Native
 ; Returns the player's true original character name.
 String Function GetOriginalPlayerName() Global Native
 
+; Validates whether akTarget can be possessed by the player.
+; Returns: 0 = Valid, 1 = Invalid, 2 = Player, 3 = Dead/Dying, 4 = Child, 5 = Non-humanoid, 6 = Mounted, 7 = Ghost.
+Int Function ValidatePossessTarget(Actor akTarget) Global Native
+
 

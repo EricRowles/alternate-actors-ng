@@ -64,6 +64,17 @@ namespace AlternateActors {
             return _origPlayerName;
         }
         RE::BGSVoiceType* GetDonorVoiceType() const { return _donorVoiceType.load(std::memory_order_acquire); }
+        RE::BGSVoiceType* GetOrigPlayerVoiceType() const { return _origPlayerVoiceType.load(std::memory_order_acquire); }
+        bool IsPuppetBase(const RE::TESNPC* a_npc) const {
+            if (!a_npc) return false;
+            return a_npc == _puppetBaseMale.load(std::memory_order_acquire) ||
+                   a_npc == _puppetBaseFemale.load(std::memory_order_acquire);
+        }
+        bool IsPuppetBase(const RE::TESForm* a_form) const {
+            if (!a_form) return false;
+            return a_form == static_cast<const RE::TESForm*>(_puppetBaseMale.load(std::memory_order_acquire)) ||
+                   a_form == static_cast<const RE::TESForm*>(_puppetBaseFemale.load(std::memory_order_acquire));
+        }
         void SetPuppet(RE::Actor* a_puppet);
         RE::Actor* GetPuppet() const {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
@@ -189,6 +200,9 @@ namespace AlternateActors {
         RE::ActorHandle _donorHandle;
         RE::FormID _savedDonorFormID{ 0 };
         std::atomic<RE::BGSVoiceType*> _donorVoiceType{ nullptr };
+        std::atomic<RE::BGSVoiceType*> _origPlayerVoiceType{ nullptr };
+        std::atomic<RE::TESNPC*> _puppetBaseMale{ nullptr };
+        std::atomic<RE::TESNPC*> _puppetBaseFemale{ nullptr };
         std::atomic<bool> _npcVoiceEnabled{ true };
         std::string _donorName;
         std::string _origPlayerName;

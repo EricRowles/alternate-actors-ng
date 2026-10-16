@@ -8,6 +8,7 @@
 #include "IdleAIManager.h"
 #include "ImpersonationManager.h"
 #include <RE/C/ControlMap.h>
+#include <RE/T/TESRace.h>
 
 namespace AlternateActors::Papyrus {
 
@@ -135,8 +136,14 @@ namespace AlternateActors::Papyrus {
             return RE::BSFixedString(impOrig);
         }
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (player && player->GetActorBase()) {
-            return player->GetActorBase()->fullName;
+        if (player) {
+            const char* dispName = player->GetDisplayFullName();
+            if (dispName && dispName[0] != '\0') {
+                return dispName;
+            }
+            if (player->GetActorBase()) {
+                return player->GetActorBase()->fullName;
+            }
         }
         return ""sv;
     }
@@ -159,6 +166,48 @@ namespace AlternateActors::Papyrus {
 
     void SetPuppetActor(RE::StaticFunctionTag*, RE::Actor* a_puppet) {
         ImpersonationManager::GetSingleton().SetPuppet(a_puppet);
+    }
+
+    std::int32_t ValidatePossessTarget(RE::StaticFunctionTag*, RE::Actor* a_target) {
+        if (!a_target) {
+            return 1;
+        }
+        if (a_target->IsPlayerRef()) {
+            return 2;
+        }
+        auto lifeState = a_target->GetLifeState();
+        if (lifeState == RE::ACTOR_LIFE_STATE::kDead ||
+            lifeState == RE::ACTOR_LIFE_STATE::kDying ||
+            lifeState == RE::ACTOR_LIFE_STATE::kBleedout ||
+            lifeState == RE::ACTOR_LIFE_STATE::kEssentialDown ||
+            a_target->IsDead() || a_target->IsInKillMove()) {
+            return 3;
+        }
+        if (a_target->IsGhost()) {
+            return 7;
+        }
+        auto* base = a_target->GetActorBase();
+        if (!base) {
+            return 1;
+        }
+        auto* npc = skyrim_cast<RE::TESNPC*>(base);
+        if (!npc) {
+            return 5;
+        }
+        auto* race = npc->GetRace();
+        if (!race) {
+            race = a_target->GetRace();
+        }
+        if (!race || !race->data.flags.all(RE::RACE_DATA::Flag::kFaceGenHead)) {
+            return 5;
+        }
+        if (race->IsChildRace() || race->data.flags.all(RE::RACE_DATA::Flag::kChild)) {
+            return 4;
+        }
+        if (a_target->IsOnMount()) {
+            return 6;
+        }
+        return 0;
     }
 
 
@@ -197,6 +246,7 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("SetPuppetFollowsPlayer", className, SetPuppetFollowsPlayer);
         a_vm->RegisterFunction("SetPuppetActor", className, SetPuppetActor);
         a_vm->RegisterFunction("GetOriginalPlayerName", className, GetOriginalPlayerName);
+        a_vm->RegisterFunction("ValidatePossessTarget", className, ValidatePossessTarget);
 
 
         SKSE::log::info("Registered AK_NG Papyrus functions.");

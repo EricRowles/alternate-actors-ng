@@ -58,16 +58,37 @@ function akmaintenance()
 		If PlayerPuppetRef
 			AK_NG.SetPuppetActor(PlayerPuppetRef)
 		EndIf
-		AK_NG.CopyAppearance(OriginalDonorRef, PlayerRef)
 	EndIf
 EndFunction
 
 ; Morph Complete Function -----------------------------------------------------------------------------------
 function AKMorphComplete(Actor akdonor, Actor akimposter)
+	if !akdonor || akdonor == akimposter
+		return
+	endif
+
 	if akdonor == Alias_PlayerPuppet.GetActorReference()
 		akrevert(akimposter)
 		return
 	EndIf
+
+	int validation = AK_NG.ValidatePossessTarget(akdonor)
+	if validation != 0
+		if validation == 3
+			Debug.Notification("Cannot possess: target is dead or dying.")
+		elseif validation == 4
+			Debug.Notification("Cannot possess: target is a child.")
+		elseif validation == 5
+			Debug.Notification("Cannot possess: target is not humanoid.")
+		elseif validation == 6
+			Debug.Notification("Cannot possess: target is mounted.")
+		elseif validation == 7
+			Debug.Notification("Cannot possess: target is a ghost.")
+		else
+			Debug.Notification("Cannot possess this target.")
+		endif
+		return
+	endif
 
 	; Capture original player name before any appearance or trait cloning occurs
 	String origPlayerName = AK_NG.GetOriginalPlayerName()
@@ -112,7 +133,6 @@ function AKMorphComplete(Actor akdonor, Actor akimposter)
 	If OriginalDonorRef
 		AK_NG.ApplyDonorProfile(akdonor, PlayerRef, None)
 	Else
-		AK_NG.CopyAppearance(PlayerRef, PlayerPuppetRef)
 		AK_NG.CopyStats(PlayerRef, PlayerPuppetRef)	
 		AK_NG.ApplyDonorProfile(akdonor, PlayerRef, PlayerPuppetRef)
 	EndIf

@@ -96,6 +96,10 @@ namespace AlternateActors::Serialization {
         if (nameLen > 0) {
             a_serde->WriteRecordData(nameStr.data(), nameLen);
         }
+
+        // Face details texture set (v4+)
+        RE::FormID faceDetailsID = a_face.faceDetails ? a_face.faceDetails->GetFormID() : 0;
+        a_serde->WriteRecordData(&faceDetailsID, sizeof(faceDetailsID));
     }
 
     void SaveCallback(SKSE::SerializationInterface* a_serde) {
@@ -125,10 +129,16 @@ namespace AlternateActors::Serialization {
             WriteFaceSnapshotRecord(a_serde, kDonorFaceDataRecord, FaceManager::GetSingleton().GetDonorAppearance());
         }
 
-        // 3. Save Dynamic Spells & Worn Items
+        // 3. Save Dynamic Spells, Quest Items & Equipped Spells
         const auto& transferredSpells = InventoryManager::GetSingleton().GetTransferredSpellIDs();
         const auto& savedPlayerSpells = InventoryManager::GetSingleton().GetSavedPlayerSpellIDs();
-        if (!transferredSpells.empty() || !savedPlayerSpells.empty()) {
+        const auto& donorQuestItems = InventoryManager::GetSingleton().GetTransferredDonorQuestItems();
+        auto* savedLeftSpell = InventoryManager::GetSingleton().GetSavedPlayerLeftSpell();
+        auto* savedRightSpell = InventoryManager::GetSingleton().GetSavedPlayerRightSpell();
+        auto* savedShout = InventoryManager::GetSingleton().GetSavedPlayerShout();
+
+        if (!transferredSpells.empty() || !savedPlayerSpells.empty() || !donorQuestItems.empty() ||
+            savedLeftSpell || savedRightSpell || savedShout) {
             if (a_serde->OpenRecord(kInventoryDataRecord, kSerializationVersion)) {
                 std::uint32_t transCount = static_cast<std::uint32_t>(transferredSpells.size());
                 a_serde->WriteRecordData(&transCount, sizeof(transCount));
@@ -141,6 +151,21 @@ namespace AlternateActors::Serialization {
                 for (auto id : savedPlayerSpells) {
                     a_serde->WriteRecordData(&id, sizeof(id));
                 }
+
+                // Donor quest items (v4+)
+                std::uint32_t questCount = static_cast<std::uint32_t>(donorQuestItems.size());
+                a_serde->WriteRecordData(&questCount, sizeof(questCount));
+                for (auto id : donorQuestItems) {
+                    a_serde->WriteRecordData(&id, sizeof(id));
+                }
+
+                // Equipped spells & shout (v4+)
+                RE::FormID leftSpellID = savedLeftSpell ? savedLeftSpell->GetFormID() : 0;
+                RE::FormID rightSpellID = savedRightSpell ? savedRightSpell->GetFormID() : 0;
+                RE::FormID shoutID = savedShout ? savedShout->GetFormID() : 0;
+                a_serde->WriteRecordData(&leftSpellID, sizeof(leftSpellID));
+                a_serde->WriteRecordData(&rightSpellID, sizeof(rightSpellID));
+                a_serde->WriteRecordData(&shoutID, sizeof(shoutID));
             }
         }
 
@@ -303,6 +328,14 @@ namespace AlternateActors::Serialization {
             }
         }
 
+        // Optional face details texture set (v4+)
+        RE::FormID faceDetailsID = 0;
+        if (a_serde->ReadRecordData(&faceDetailsID, sizeof(faceDetailsID))) {
+            if (faceDetailsID != 0 && a_serde->ResolveFormID(faceDetailsID, faceDetailsID)) {
+                a_outFace.faceDetails = RE::TESForm::LookupByID<RE::BGSTextureSet>(faceDetailsID);
+            }
+        }
+
         return true;
     }
 
@@ -378,8 +411,42 @@ namespace AlternateActors::Serialization {
                         }
                     }
 
-                    SKSE::log::info("Loaded {} transferred spells and {} saved player spells from co-save.",
-                        transCount, savedCount);
+                    // Optional donor quest items (v4+)
+                    std::uint32_t questCount = 0;
+                    if (a_serde->ReadRecordData(&questCount, sizeof(questCount))) {
+                        for (std::uint32_t i = 0; i < questCount; ++i) {
+                            RE::FormID qID = 0;
+                            a_serde->ReadRecordData(&qID, sizeof(qID));
+                            if (a_serde->ResolveFormID(qID, qID)) {
+                                InventoryManager::GetSingleton().AddTransferredDonorQuestItem(qID);
+                            }
+                        }
+                    }
+
+                    // Optional equipped spells & shout (v4+)
+                    RE::FormID leftSpellID = 0, rightSpellID = 0, shoutID = 0;
+                    RE::SpellItem* leftSpell = nullptr;
+                    RE::SpellItem* rightSpell = nullptr;
+                    RE::TESShout* shout = nullptr;
+                    if (a_serde->ReadRecordData(&leftSpellID, sizeof(leftSpellID))) {
+                        if (leftSpellID && a_serde->ResolveFormID(leftSpellID, leftSpellID)) {
+                            leftSpell = RE::TESForm::LookupByID<RE::SpellItem>(leftSpellID);
+                        }
+                        if (a_serde->ReadRecordData(&rightSpellID, sizeof(rightSpellID))) {
+                            if (rightSpellID && a_serde->ResolveFormID(rightSpellID, rightSpellID)) {
+                                rightSpell = RE::TESForm::LookupByID<RE::SpellItem>(rightSpellID);
+                            }
+                        }
+                        if (a_serde->ReadRecordData(&shoutID, sizeof(shoutID))) {
+                            if (shoutID && a_serde->ResolveFormID(shoutID, shoutID)) {
+                                shout = RE::TESForm::LookupByID<RE::TESShout>(shoutID);
+                            }
+                        }
+                        InventoryManager::GetSingleton().SetSavedPlayerEquippedSpells(leftSpell, rightSpell, shout);
+                    }
+
+                    SKSE::log::info("Loaded {} transferred spells, {} saved player spells, and {} donor quest items from co-save.",
+                        transCount, savedCount, questCount);
                     break;
                 }
 

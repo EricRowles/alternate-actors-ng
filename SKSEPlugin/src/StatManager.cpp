@@ -60,10 +60,12 @@ namespace AlternateActors {
             avOwner->SetBaseActorValue(av, val);
         }
 
-        // Restore pool values (damage modifier = 0) so actor doesn't suffer broken health/stamina/magicka pools
-        avOwner->RestoreActorValue(RE::ActorValue::kHealth, avOwner->GetBaseActorValue(RE::ActorValue::kHealth));
-        avOwner->RestoreActorValue(RE::ActorValue::kMagicka, avOwner->GetBaseActorValue(RE::ActorValue::kMagicka));
-        avOwner->RestoreActorValue(RE::ActorValue::kStamina, avOwner->GetBaseActorValue(RE::ActorValue::kStamina));
+        // Restore pool values (damage modifier = 0) so actor doesn't suffer broken health/stamina/magicka pools.
+        // Restoring with a large positive float clears any accumulated damage modifier (e.g., when a high-health
+        // player morphs into a low-health NPC), preventing negative health calculation and instant death.
+        for (auto poolAV : { RE::ActorValue::kHealth, RE::ActorValue::kMagicka, RE::ActorValue::kStamina }) {
+            avOwner->RestoreActorValue(poolAV, 99999.0f);
+        }
 
         SKSE::log::info("Applied {} stat/skill values to actor {:08X}.",
             a_snapshot.baseValues.size(),

@@ -18,6 +18,7 @@ int _oid_combatAI
 int _oid_npcVoice
 int _oid_puppetFollows
 int _oid_revert
+bool _pendingRevert = false
 
 int function GetVersion()
 	return 5
@@ -27,7 +28,11 @@ event OnVersionUpdate(int a_version)
 	ModName = "Alternate Actors NG"
 	Pages = None
 
+	AK_NG.SetIdleAIEnabled(IdleAIEnabled)
+	AK_NG.SetIdleAITimeout(IdleAITimeout)
 	AK_NG.SetCombatAIEnabled(CombatAIEnabled)
+	AK_NG.SetNPCVoiceEnabled(NPCVoiceEnabled)
+	AK_NG.SetPuppetFollowsPlayer(PuppetFollowsPlayer)
 endEvent
 
 event OnConfigInit()
@@ -94,9 +99,23 @@ event OnOptionSelect(int option)
 		AK_NG.SetPuppetFollowsPlayer(PuppetFollowsPlayer)
 	elseif option == _oid_revert
 		if akquest.Alias_OriginalDonor.GetActorReference()
-			SetTextOptionValue(_oid_revert, "Reverting...")
-			akquest.akrevert(PlayerRef)
+			Debug.Notification("Close the menu to return to your body.")
+			_pendingRevert = true
+			SetTextOptionValue(_oid_revert, "Pending Menu Close...")
 		endif
+	endif
+endEvent
+
+event OnConfigClose()
+	if _pendingRevert
+		_pendingRevert = false
+		RegisterForSingleUpdate(0.1)
+	endif
+endEvent
+
+event OnUpdate()
+	if akquest.Alias_OriginalDonor.GetActorReference()
+		akquest.akrevert(PlayerRef)
 	endif
 endEvent
 

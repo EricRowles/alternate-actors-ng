@@ -200,8 +200,7 @@ namespace AlternateActors {
             targetNPC->actorData.actorBaseFlags.reset(RE::ACTOR_BASE_DATA::Flag::kFemale);
         }
 
-        if (isPuppet || base->GetFormID() == 0x00000D93 || base->GetFormID() == 0x00000D94 ||
-            (base->GetFormID() & 0x00FFFFFF) == 0x00000D93 || (base->GetFormID() & 0x00FFFFFF) == 0x00000D94) {
+        if (isPuppet || (base && ImpersonationManager::GetSingleton().IsPuppetBase(base))) {
             targetNPC->voiceType = nullptr;
         } else {
             targetNPC->voiceType = a_snapshot.voiceType;
