@@ -340,6 +340,12 @@ namespace AlternateActors {
             }
         }
 
+        auto* donor = GetDonor();
+        if (donor) {
+            donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
+            _origCharSetSpeakingDone(donor, true);
+        }
+
         // Advance MenuTopicManager
         auto* ui = RE::UI::GetSingleton();
         auto* topicMgr = RE::MenuTopicManager::GetSingleton();
@@ -582,7 +588,7 @@ namespace AlternateActors {
                 return false;
             }
 
-            if (inActiveConversation) {
+            if (inActiveConversation || isDonor) {
                 SKSE::log::info("Decoupled proxy dialogue: text='{}', voice='{}', sound={:08X}",
                     a_response->text.c_str(),
                     a_response->voice.c_str(),
@@ -725,8 +731,34 @@ namespace AlternateActors {
                     a_this->SetEmotionType(a_response->animFaceArchType.get());
                     a_this->SetEmotionValue(a_response->percent);
                 }
+
+                // Explicitly queue subtitle for player
+                if (!a_response->text.empty()) {
+                    if (auto* subMgr = RE::SubtitleManager::GetSingleton()) {
+                        RE::BSSpinLockGuard locker(subMgr->lock);
+                        bool alreadyQueued = false;
+                        for (auto& sub : subMgr->subtitles) {
+                            if (sub.subtitle == a_response->text.c_str()) {
+                                alreadyQueued = true;
+                                sub.speaker = a_this->GetHandle();
+                                sub.targetDistance = 0.0f;
+                                sub.forceDisplay = true;
+                                break;
+                            }
+                        }
+                        if (!alreadyQueued) {
+                            RE::SubtitleInfo info;
+                            info.speaker = a_this->GetHandle();
+                            info.subtitle = a_response->text;
+                            info.targetDistance = 0.0f;
+                            info.forceDisplay = true;
+                            subMgr->subtitles.push_back(info);
+                        }
+                    }
+                }
+
                 mgr.OnDialogueResponseStarted(a_response);
-                bool ret = _origPlayerUpdateInDialogue(a_this, a_response, a_unused);
+                bool ret = _origCharUpdateInDialogue(a_this, a_response, a_unused);
                 AttachSoundHandlesToHead(a_this);
                 return ret;
             }
@@ -775,17 +807,19 @@ namespace AlternateActors {
                 auto* puppet = mgr.GetPuppet();
                 auto* donor = mgr.GetDonor();
                 if ((puppet && a_this == puppet) || (donor && a_this == donor)) {
-                    if (!mgr.IsPlayerSpeaking()) {
-                        auto* player = mgr.GetPlayer();
-                        if (!player) player = RE::PlayerCharacter::GetSingleton();
-                        if (player) {
-                            player->SetEmotionType(RE::EmotionType::kNeutral);
-                            player->SetEmotionValue(0);
-                            if (auto* faceData = player->GetFaceGenAnimationData()) {
-                                RE::BSSpinLockGuard locker(faceData->lock);
-                                faceData->Reset(0.0f, false, true, false, false);
-                                faceData->ClearExpressionOverride();
-                            }
+                    if (mgr.IsPlayerSpeaking()) {
+                        // Block early completion while player is still speaking
+                        return;
+                    }
+                    auto* player = mgr.GetPlayer();
+                    if (!player) player = RE::PlayerCharacter::GetSingleton();
+                    if (player) {
+                        player->SetEmotionType(RE::EmotionType::kNeutral);
+                        player->SetEmotionValue(0);
+                        if (auto* faceData = player->GetFaceGenAnimationData()) {
+                            RE::BSSpinLockGuard locker(faceData->lock);
+                            faceData->Reset(0.0f, false, true, false, false);
+                            faceData->ClearExpressionOverride();
                         }
                     }
                 }
@@ -799,6 +833,10 @@ namespace AlternateActors {
             auto& mgr = ImpersonationManager::GetSingleton();
             if (mgr.IsActive()) {
                 if (a_set) {
+                    if (mgr.IsPlayerSpeaking() && !mgr.IsInCompleteSpeaking()) {
+                        // Block early completion while player is still speaking
+                        return;
+                    }
                     if (!mgr.IsInCompleteSpeaking()) {
                         mgr.ResetSpeechTracking();
                     }
@@ -1214,7 +1252,7 @@ namespace AlternateActors {
             auto* ui = RE::UI::GetSingleton();
             bool menuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
             if (player && !menuOpen) {
-                _origPlayerUpdateInDialogue(player, nullptr, false);
+                _origCharUpdateInDialogue(player, nullptr, false);
                 AttachSoundHandlesToHead(player);
             }
             CheckPlayerSpeakingDone();

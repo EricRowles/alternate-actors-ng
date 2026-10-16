@@ -66,6 +66,77 @@ namespace AlternateActors {
         }
     }
 
+    void IdleAIManager::InstallAimControllerSafetyPatch() {
+        // In Skyrim engine, function 47299 (CombatProjectileAimController raycast/aim evaluation)
+        // retrieves the target Actor reference via 0x1402be9b0. When an actor or player transitions
+        // cells or their 3D unloads, 0x1402be9b0 returns nullptr (rax == 0).
+        // Function 47299 has a branch (je 0x140868320) that clears rdi to null, but then falls through
+        // directly to `mov rax, [r14]` with r14 == 0, causing a fatal null dereference crash.
+        // We patch the branch landing site at `+0x1F0` with a jump to the function epilogue (+0x25C)
+        // where it safely returns nullptr (rbx == 0) to caller 47300, which already expects and handles null.
+        auto funcAddr = REL::RelocationID(47299, 47299).address();
+        if (!funcAddr) {
+            SKSE::log::error("Failed to resolve function 47299 for aim controller safety patch!");
+            return;
+        }
+
+        auto* bytes = reinterpret_cast<const std::uint8_t*>(funcAddr);
+        // Look for the crash pattern within the first 0x300 bytes:
+        // 49 8B 06 49 8B CE (mov rax, [r14]; mov rcx, r14)
+        std::size_t crashOffset = 0;
+        for (std::size_t i = 0x100; i < 0x300; ++i) {
+            if (bytes[i] == 0x49 && bytes[i + 1] == 0x8B && bytes[i + 2] == 0x06 &&
+                bytes[i + 3] == 0x49 && bytes[i + 4] == 0x8B && bytes[i + 5] == 0xCE) {
+                crashOffset = i;
+                break;
+            }
+        }
+
+        if (crashOffset == 0 || crashOffset < 7) {
+            SKSE::log::warn("Could not locate crash pattern in function 47299 at {:016X}", funcAddr);
+            return;
+        }
+
+        std::size_t patchSite = crashOffset - 7;
+        // Verify preceding bytes are mov rdi, rbx (48 8B FB) and mov [rbp - disp], rbx (48 89 5D)
+        if (bytes[patchSite] != 0x48 || bytes[patchSite + 1] != 0x8B || bytes[patchSite + 2] != 0xFB) {
+            SKSE::log::warn("Preceding bytes at {:016X} do not match expected mov rdi, rbx (found {:02X} {:02X} {:02X})",
+                funcAddr + patchSite, bytes[patchSite], bytes[patchSite + 1], bytes[patchSite + 2]);
+            return;
+        }
+
+        // Locate epilogue returning rbx: mov rax, rbx (48 8B C3)
+        std::size_t epilogueOffset = 0;
+        for (std::size_t i = crashOffset; i < crashOffset + 0x100; ++i) {
+            if (bytes[i] == 0x48 && bytes[i + 1] == 0x8B && bytes[i + 2] == 0xC3) {
+                epilogueOffset = i;
+                break;
+            }
+        }
+
+        if (epilogueOffset == 0) {
+            SKSE::log::warn("Could not locate epilogue return in function 47299 at {:016X}", funcAddr);
+            return;
+        }
+
+        // Calculate relative 32-bit displacement for jmp rel32 (E9 <disp32>)
+        // disp32 = target - (patchAddress + 5)
+        std::int32_t disp32 = static_cast<std::int32_t>(epilogueOffset - (patchSite + 5));
+        std::uint8_t patch[7] = {
+            0xE9,
+            static_cast<std::uint8_t>(disp32 & 0xFF),
+            static_cast<std::uint8_t>((disp32 >> 8) & 0xFF),
+            static_cast<std::uint8_t>((disp32 >> 16) & 0xFF),
+            static_cast<std::uint8_t>((disp32 >> 24) & 0xFF),
+            0x90, // nop
+            0x90  // nop
+        };
+
+        REL::safe_write(funcAddr + patchSite, patch, sizeof(patch));
+        SKSE::log::info("Installed CombatProjectileAimController safety patch in function 47299 at {:016X} (jmp rel32 +0x{:X})",
+            funcAddr + patchSite, disp32);
+    }
+
     void IdleAIManager::InstallHooks() {
         if (_hooksInstalled) return;
 
@@ -76,6 +147,8 @@ namespace AlternateActors {
             SKSE::log::error("Failed to install Projectile::Launch context hook!");
         }
 
+        InstallAimControllerSafetyPatch();
+
         _hooksInstalled = true;
     }
 
@@ -83,8 +156,26 @@ namespace AlternateActors {
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
             CheckIdleAI();
+
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player) {
+                auto* currentCell = player->GetParentCell();
+                if (currentCell && currentCell != _lastCell) {
+                    _lastCell = currentCell;
+                    _currentTarget.reset();
+                    auto& runtime = player->GetActorRuntimeData();
+                    if (runtime.currentCombatTarget) {
+                        runtime.currentCombatTarget.reset();
+                    }
+                    if (runtime.combatController) {
+                        runtime.combatController->targetHandle.reset();
+                    }
+                    // On cell transition, allow idle dialogue evaluation after a short settle time (3s)
+                    _lastIdleChatterTime = std::chrono::steady_clock::now() - std::chrono::seconds(12);
+                }
+            }
+
             if (_aiActive.load(std::memory_order_acquire) && _isControllingNPC.load(std::memory_order_acquire)) {
-                auto* player = RE::PlayerCharacter::GetSingleton();
                 if (player) {
                     if (player->IsInCombat()) {
                         if (!_combatAIEnabled.load(std::memory_order_acquire)) {
@@ -505,7 +596,37 @@ namespace AlternateActors {
         if (AliasManager::GetSingleton().HasQuest(a_quest->GetFormID())) {
             return true;
         }
-        // 3. Quest dialogue conditions explicitly check donor ID
+        // 3. Donor has an active alias instance for this quest
+        if (auto* aliasArray = a_donor->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
+            RE::BSReadLockGuard locker(aliasArray->lock);
+            for (auto* inst : aliasArray->aliases) {
+                if (inst && inst->quest == a_quest) {
+                    return true;
+                }
+            }
+        }
+        // 4. Player has an active alias instance for this quest (if already swapped)
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+            if (auto* pAliasArray = player->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
+                RE::BSReadLockGuard locker(pAliasArray->lock);
+                for (auto* inst : pAliasArray->aliases) {
+                    if (inst && inst->quest == a_quest) {
+                        return true;
+                    }
+                }
+            }
+        }
+        // 5. Quest aliases explicitly point to donor
+        for (auto* baseAlias : a_quest->aliases) {
+            if (!baseAlias) continue;
+            if (auto* refAlias = skyrim_cast<RE::BGSRefAlias*>(baseAlias)) {
+                auto* ref = refAlias->GetReference();
+                if (ref && (ref == a_donor || ref->GetBaseObject() == a_donor->GetBaseObject() || ref->GetBaseObject() == a_donor->GetActorBase())) {
+                    return true;
+                }
+            }
+        }
+        // 6. Quest dialogue conditions explicitly check donor ID
         if (auto* cond = a_quest->QConditions()) {
             for (auto* item = cond->head; item; item = item->next) {
                 if (item->data.functionData.function.underlying() == 72) { // kGetIsID
@@ -629,7 +750,9 @@ namespace AlternateActors {
             const auto& miscTopics = quest->topics[kMiscIndex];
             for (auto* topic : miscTopics) {
                 if (!topic) continue;
-                if (topic->data.subtype.get() != RE::DIALOGUE_DATA::Subtype::kIdle) {
+                auto subtypeVal = topic->data.subtype.underlying();
+                // Subtype 94 is kIdle in post-Dragonborn runtimes; 88 is kIdle in Skyrim.esm/Dawnguard.esm pre-Dragonborn
+                if (subtypeVal != 88 && subtypeVal != 94 && topic->data.subtype.get() != RE::DIALOGUE_DATA::Subtype::kIdle) {
                     continue;
                 }
 

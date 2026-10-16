@@ -89,6 +89,7 @@ namespace AlternateActors {
         void SetInSelfDialogue(bool a_inSelf) { _inSelfDialogue.store(a_inSelf, std::memory_order_release); }
 
         void InstallHooks();
+        void InstallAimControllerSafetyPatch();
         static void Hook_Projectile_Launch(struct _CONTEXT& a_ctx);
 
         void Clear() {
