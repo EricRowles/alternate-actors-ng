@@ -52,20 +52,6 @@ namespace AlternateActors {
         }
     }
 
-    void IdleAIManager::Hook_Projectile_Launch(CONTEXT& a_ctx) {
-        auto* launchData = reinterpret_cast<RE::Projectile::LaunchData*>(a_ctx.Rdx);
-        if (!launchData) return;
-
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (launchData->shooter == player) {
-            if (IdleAIManager::GetSingleton().IsCombatAIActive() || IdleAIManager::GetSingleton().IsBowDrawn()) {
-                // Ensure autonomous combat AI projectile has full draw power without altering the shooter
-                // (preserving player kill attribution, quest progression, XP, and proper collision)
-                launchData->power = 1.0f;
-            }
-        }
-    }
-
     void IdleAIManager::InstallAimControllerSafetyPatch() {
         // In Skyrim engine, function 47299 (CombatProjectileAimController raycast/aim evaluation)
         // retrieves the target Actor reference via 0x1402be9b0. When an actor or player transitions
@@ -140,13 +126,6 @@ namespace AlternateActors {
     void IdleAIManager::InstallHooks() {
         if (_hooksInstalled) return;
 
-        auto launchAddr = REL::RelocationID(42928, 44108).address();
-        if (SKSE::stl::install_context_hook(launchAddr, 5, &Hook_Projectile_Launch, -5)) {
-            SKSE::log::info("Installed Projectile::Launch context hook at {:016X}", launchAddr);
-        } else {
-            SKSE::log::error("Failed to install Projectile::Launch context hook!");
-        }
-
         InstallAimControllerSafetyPatch();
 
         _hooksInstalled = true;
@@ -155,45 +134,29 @@ namespace AlternateActors {
     void IdleAIManager::Update() {
         {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
-            CheckIdleAI();
-
             auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player && player->IsInCombat()) {
+                if (_aiActive.load(std::memory_order_acquire)) {
+                    StopIdleAI();
+                }
+            } else {
+                CheckIdleAI();
+            }
+
             if (player) {
                 auto* currentCell = player->GetParentCell();
                 if (currentCell && currentCell != _lastCell) {
                     _lastCell = currentCell;
-                    _currentTarget.reset();
-                    auto& runtime = player->GetActorRuntimeData();
-                    if (runtime.currentCombatTarget) {
-                        runtime.currentCombatTarget.reset();
-                    }
-                    if (runtime.combatController) {
-                        runtime.combatController->targetHandle.reset();
-                    }
                     // On cell transition, allow idle dialogue evaluation after a short settle time (3s)
                     _lastIdleChatterTime = std::chrono::steady_clock::now() - std::chrono::seconds(12);
                 }
             }
 
             if (_aiActive.load(std::memory_order_acquire) && _isControllingNPC.load(std::memory_order_acquire)) {
-                if (player) {
-                    if (player->IsInCombat()) {
-                        if (!_combatAIEnabled.load(std::memory_order_acquire)) {
-                            StopIdleAI();
-                        } else {
-                            if (!_isCombatAIActive.load(std::memory_order_acquire)) {
-                                _isCombatAIActive.store(true, std::memory_order_release);
-                                player->SetAIDriven(false);
-                            }
-                            UpdateCombatAI();
-                        }
-                    } else {
-                        if (_isCombatAIActive.load(std::memory_order_acquire)) {
-                            _isCombatAIActive.store(false, std::memory_order_release);
-                            player->SetAIDriven(true);
-                            player->EvaluatePackage(true, true);
-                        }
-                    }
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration<float>(now - _lastPackageSyncTime).count() >= 1.5f) {
+                    _lastPackageSyncTime = now;
+                    ImpersonationManager::GetSingleton().SyncDonorUpdatesToPlayer();
                 }
             }
             CheckAndTriggerIdleDialogue();
@@ -242,8 +205,20 @@ namespace AlternateActors {
         if (a_event->menuName == "Dialogue Menu"sv) {
             if (!a_event->opening) {
                 _inSelfDialogue.store(false, std::memory_order_release);
-                auto* topicMgr = RE::MenuTopicManager::GetSingleton();
                 auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+                auto* donor = ImpersonationManager::GetSingleton().GetDonor();
+                if (puppet && donor) {
+                    auto* extraFaction = puppet->extraList.GetByType<RE::ExtraFactionChanges>();
+                    if (extraFaction) {
+                        for (const auto& fRank : extraFaction->factionChanges) {
+                            if (fRank.faction) {
+                                donor->AddToFaction(fRank.faction, fRank.rank);
+                            }
+                        }
+                        extraFaction->factionChanges.clear();
+                    }
+                }
+                auto* topicMgr = RE::MenuTopicManager::GetSingleton();
                 if (topicMgr && puppet) {
                     auto puppetHandle = puppet->GetHandle();
                     if (topicMgr->speaker == puppetHandle) {
@@ -276,6 +251,14 @@ namespace AlternateActors {
             return;
         }
 
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (player && player->IsInCombat()) {
+            if (_aiActive.load(std::memory_order_acquire)) {
+                StopIdleAI();
+            }
+            return;
+        }
+
         auto* ui = RE::UI::GetSingleton();
         if (!ui || ui->GameIsPaused() || ui->IsModalMenuOpen() || ui->IsItemMenuOpen() ||
             ui->IsApplicationMenuOpen() || ui->IsMenuOpen("Dialogue Menu"sv) || ui->IsMenuOpen("Console"sv) ||
@@ -290,17 +273,7 @@ namespace AlternateActors {
             return;
         }
 
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (player && player->IsInCombat()) {
-            if (!_combatAIEnabled.load(std::memory_order_acquire)) {
-                if (_aiActive.load(std::memory_order_acquire)) {
-                    StopIdleAI();
-                }
-                return;
-            }
-        }
-
-        float timeout = (player && player->IsInCombat()) ? 0.75f : _idleTimeoutSeconds.load(std::memory_order_acquire);
+        float timeout = _idleTimeoutSeconds.load(std::memory_order_acquire);
 
         auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - _lastInputTime).count();
@@ -315,11 +288,7 @@ namespace AlternateActors {
         if (!_isControllingNPC.load(std::memory_order_acquire) || !_enabled.load(std::memory_order_acquire)) return;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return;
-
-        if (player->IsInCombat() && !_combatAIEnabled.load(std::memory_order_acquire)) {
-            return;
-        }
+        if (!player || player->IsInCombat()) return;
 
         auto* pc = RE::PlayerControls::GetSingleton();
         if (pc) {
@@ -327,29 +296,20 @@ namespace AlternateActors {
         }
 
         _aiActive.store(true, std::memory_order_release);
+        _lastPackageSyncTime = std::chrono::steady_clock::now();
 
-        if (player->IsInCombat()) {
-            _isCombatAIActive.store(true, std::memory_order_release);
-            _lastCombatActionTime = std::chrono::steady_clock::now();
-            auto* actorState = player->AsActorState();
-            if (actorState && actorState->GetWeaponState() == RE::WEAPON_STATE::kSheathed) {
-                player->DrawWeaponMagicHands(true);
-            }
-            player->SetAIDriven(false);
-            SKSE::log::info("Player idle timeout reached in combat - engaged autonomous combat AI");
+        ImpersonationManager::GetSingleton().SyncDonorUpdatesToPlayer();
+
+        player->AllowBleedoutDialogue(true);
+        player->SetAIDriven(true);
+        player->EvaluatePackage(true, true);
+
+        auto* currentPkg = player->GetCurrentPackage();
+        if (currentPkg) {
+            SKSE::log::info("Player idle timeout reached - engaged autonomous AI package: {:08X} ({})",
+                currentPkg->GetFormID(), currentPkg->GetFormEditorID() ? currentPkg->GetFormEditorID() : "No EDID");
         } else {
-            _isCombatAIActive.store(false, std::memory_order_release);
-            player->AllowBleedoutDialogue(true);
-            player->SetAIDriven(true);
-            player->EvaluatePackage(true, true);
-
-            auto* currentPkg = player->GetCurrentPackage();
-            if (currentPkg) {
-                SKSE::log::info("Player idle timeout reached - engaged autonomous AI package: {:08X} ({})",
-                    currentPkg->GetFormID(), currentPkg->GetFormEditorID() ? currentPkg->GetFormEditorID() : "No EDID");
-            } else {
-                SKSE::log::warn("Player idle timeout reached - engaged autonomous AI, but GetCurrentPackage() returned null!");
-            }
+            SKSE::log::warn("Player idle timeout reached - engaged autonomous AI, but GetCurrentPackage() returned null!");
         }
     }
 
@@ -359,13 +319,7 @@ namespace AlternateActors {
         auto* pc = RE::PlayerControls::GetSingleton();
         if (player) {
             player->SetAIDriven(false);
-            if (player->IsBlocking()) {
-                player->NotifyAnimationGraph("blockStop");
-            }
-            if (_bowDrawn.load(std::memory_order_acquire)) {
-                player->NotifyAnimationGraph("attackStop");
-                player->NotifyAnimationGraph("arrowRelease");
-            }
+            ImpersonationManager::GetSingleton().ClearPlayerPackages();
             player->EvaluatePackage(false, false);
 
             if (_aiActive.load(std::memory_order_acquire)) {
@@ -377,21 +331,8 @@ namespace AlternateActors {
             pc->data.moveInputVec = { 0.0f, 0.0f };
             pc->data.running = _savedUserRunning;
         }
-        _currentTarget.reset();
-        _isBlocking = false;
-        _bowDrawn.store(false, std::memory_order_release);
-        _isCombatAIActive.store(false, std::memory_order_release);
         _aiActive.store(false, std::memory_order_release);
         _lastInputTime = std::chrono::steady_clock::now();
-    }
-
-    void IdleAIManager::SetCombatAIEnabled(bool a_enabled) {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        _combatAIEnabled.store(a_enabled, std::memory_order_release);
-        if (!a_enabled && _isCombatAIActive.load(std::memory_order_acquire)) {
-            StopIdleAI();
-        }
-        SKSE::log::info("IdleAIManager combat AI enabled set to: {}", a_enabled);
     }
 
     void IdleAIManager::SetControllingNPC(bool a_controlling) {
@@ -592,11 +533,7 @@ namespace AlternateActors {
         if (a_donorFile && a_quest->GetFile(0) == a_donorFile) {
             return true;
         }
-        // 2. Donor is in a swapped quest alias
-        if (AliasManager::GetSingleton().HasQuest(a_quest->GetFormID())) {
-            return true;
-        }
-        // 3. Donor has an active alias instance for this quest
+        // 2. Donor has an active alias instance for this quest
         if (auto* aliasArray = a_donor->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
             RE::BSReadLockGuard locker(aliasArray->lock);
             for (auto* inst : aliasArray->aliases) {
@@ -605,18 +542,7 @@ namespace AlternateActors {
                 }
             }
         }
-        // 4. Player has an active alias instance for this quest (if already swapped)
-        if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-            if (auto* pAliasArray = player->extraList.GetByType<RE::ExtraAliasInstanceArray>()) {
-                RE::BSReadLockGuard locker(pAliasArray->lock);
-                for (auto* inst : pAliasArray->aliases) {
-                    if (inst && inst->quest == a_quest) {
-                        return true;
-                    }
-                }
-            }
-        }
-        // 5. Quest aliases explicitly point to donor
+        // 3. Quest aliases explicitly point to donor
         for (auto* baseAlias : a_quest->aliases) {
             if (!baseAlias) continue;
             if (auto* refAlias = skyrim_cast<RE::BGSRefAlias*>(baseAlias)) {
@@ -626,7 +552,7 @@ namespace AlternateActors {
                 }
             }
         }
-        // 6. Quest dialogue conditions explicitly check donor ID
+        // 4. Quest dialogue conditions explicitly check donor ID
         if (auto* cond = a_quest->QConditions()) {
             for (auto* item = cond->head; item; item = item->next) {
                 if (item->data.functionData.function.underlying() == 72) { // kGetIsID
@@ -817,398 +743,10 @@ namespace AlternateActors {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         _activeDonorActor = a_donor ? a_donor->GetHandle() : RE::ActorHandle();
         if (a_donor) {
-            auto* extraStyle = a_donor->extraList.GetByType<RE::ExtraCombatStyle>();
-            if (extraStyle && extraStyle->combatStyle) {
-                _donorCombatStyle = extraStyle->combatStyle;
-            } else if (auto* base = a_donor->GetActorBase()) {
-                _donorCombatStyle = base->GetCombatStyle();
-            }
-            if (auto* base = a_donor->GetActorBase()) {
-                _donorAIData = base->aiData;
-                _donorClass = base->npcClass;
-            }
-            SKSE::log::info("IdleAIManager::SetActiveDonorActor: donor {:08X}, combatStyle {:08X}, class {:08X}",
-                static_cast<std::uint32_t>(a_donor->GetFormID()),
-                _donorCombatStyle ? static_cast<std::uint32_t>(_donorCombatStyle->GetFormID()) : 0,
-                _donorClass ? static_cast<std::uint32_t>(_donorClass->GetFormID()) : 0);
+            SKSE::log::info("IdleAIManager::SetActiveDonorActor: donor {:08X}",
+                static_cast<std::uint32_t>(a_donor->GetFormID()));
         } else {
-            _donorCombatStyle = nullptr;
-            _donorClass = nullptr;
-            _donorAIData = {};
             SKSE::log::info("IdleAIManager::SetActiveDonorActor: cleared active donor");
         }
     }
-
-    RE::Actor* IdleAIManager::FindBestCombatTarget() {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return nullptr;
-
-        auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
-        auto* donor = ImpersonationManager::GetSingleton().GetDonor();
-
-        // 1. Existing valid combat target
-        auto targetHandle = player->GetActorRuntimeData().currentCombatTarget;
-        auto target = targetHandle.get();
-        if (target && target.get() != player && target.get() != puppet && target.get() != donor &&
-            !target->IsDead() && !target->IsInKillMove() && !target->IsGhost() &&
-            target->GetParentCell() == player->GetParentCell()) {
-            return target.get();
-        }
-
-        // 2. Existing combatController target
-        auto& runtime = player->GetActorRuntimeData();
-        if (runtime.combatController) {
-            auto ccTarget = runtime.combatController->targetHandle.get();
-            if (ccTarget && ccTarget.get() != player && ccTarget.get() != puppet && ccTarget.get() != donor &&
-                !ccTarget->IsDead() && !ccTarget->IsInKillMove() && !ccTarget->IsGhost() &&
-                ccTarget->GetParentCell() == player->GetParentCell()) {
-                return ccTarget.get();
-            }
-        }
-
-        // 3. Scan high actors for hostiles
-        auto* processLists = RE::ProcessLists::GetSingleton();
-        if (!processLists) return nullptr;
-
-        RE::Actor* bestActor = nullptr;
-        float bestDist = 3500.0f;
-        RE::NiPoint3 playerPos = player->GetPosition();
-
-        for (const auto& handle : processLists->highActorHandles) {
-            auto actor = handle.get();
-            if (!actor || actor.get() == player || actor.get() == puppet || actor.get() == donor) {
-                continue;
-            }
-            if (actor->IsDead() || actor->IsInKillMove() || actor->IsGhost()) {
-                continue;
-            }
-            if (actor->GetParentCell() != player->GetParentCell()) {
-                continue;
-            }
-
-            bool isHostile = actor->IsHostileToActor(player) ||
-                             (actor->GetActorRuntimeData().currentCombatTarget == player->GetHandle()) ||
-                             player->IsHostileToActor(actor.get());
-
-            if (!isHostile) {
-                continue;
-            }
-
-            float dist = playerPos.GetDistance(actor->GetPosition());
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestActor = actor.get();
-            }
-        }
-
-        return bestActor;
-    }
-
-    void IdleAIManager::UpdateCombatAI() {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || !player->IsInCombat()) return;
-
-        auto* pc = RE::PlayerControls::GetSingleton();
-
-        // 1. Acquire target
-        auto* target = FindBestCombatTarget();
-        if (!target) {
-            if (pc) {
-                pc->data.autoMove = false;
-                pc->data.moveInputVec = { 0.0f, 0.0f };
-            }
-            return;
-        }
-
-        _currentTarget = target->GetHandle();
-        player->GetActorRuntimeData().currentCombatTarget = target->GetHandle();
-
-        // Ensure combat controller has donor combat style
-        auto& runtime = player->GetActorRuntimeData();
-        if (runtime.combatController) {
-            if (_donorCombatStyle && runtime.combatController->combatStyle != _donorCombatStyle) {
-                runtime.combatController->combatStyle = _donorCombatStyle;
-            }
-            runtime.combatController->targetHandle = target->GetHandle();
-        }
-
-        // 2. Weapon draw state check
-        auto* actorState = player->AsActorState();
-        auto weaponState = actorState ? actorState->GetWeaponState() : RE::WEAPON_STATE::kSheathed;
-        if (weaponState == RE::WEAPON_STATE::kSheathed) {
-            player->DrawWeaponMagicHands(true);
-            SKSE::log::info("Combat AI: Drawing weapon for player...");
-            return;
-        }
-        if (weaponState == RE::WEAPON_STATE::kDrawing || weaponState == RE::WEAPON_STATE::kSheathing) {
-            // Wait for draw/sheathe animation to complete
-            return;
-        }
-
-        // 3. Aiming & Heading
-        RE::NiPoint3 pPos = player->GetPosition();
-        RE::NiPoint3 tPos = target->GetPosition();
-        float dx = tPos.x - pPos.x;
-        float dy = tPos.y - pPos.y;
-        float dz = tPos.z - pPos.z;
-        float horizDist = std::sqrt(dx * dx + dy * dy);
-        float fullDist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-        float desiredHeading = std::atan2(dx, dy);
-        player->SetHeading(desiredHeading);
-        if (horizDist > 0.001f) {
-            float desiredPitch = -std::atan2(dz, horizDist);
-            player->SetLooking(desiredPitch);
-        }
-
-        // 4. Equipment analysis
-        auto* leftObj = player->GetEquippedObject(true);
-        auto* rightObj = player->GetEquippedObject(false);
-
-        bool hasBow = false;
-        bool hasCrossbow = false;
-        bool hasShield = false;
-        bool hasMeleeWeapon = false;
-        auto* leftSpell = leftObj ? skyrim_cast<RE::SpellItem*>(leftObj) : nullptr;
-        auto* rightSpell = rightObj ? skyrim_cast<RE::SpellItem*>(rightObj) : nullptr;
-        bool hasSpells = (leftSpell != nullptr || rightSpell != nullptr);
-
-        if (rightObj && rightObj->Is(RE::FormType::Weapon)) {
-            auto* weap = skyrim_cast<RE::TESObjectWEAP*>(rightObj);
-            if (weap) {
-                if (weap->GetWeaponType() == RE::WEAPON_TYPE::kBow) {
-                    hasBow = true;
-                } else if (weap->GetWeaponType() == RE::WEAPON_TYPE::kCrossbow) {
-                    hasCrossbow = true;
-                } else {
-                    hasMeleeWeapon = true;
-                }
-            }
-        }
-
-        if (leftObj && leftObj->Is(RE::FormType::Armor)) {
-            auto* armo = skyrim_cast<RE::TESObjectARMO*>(leftObj);
-            if (armo && armo->IsShield()) {
-                hasShield = true;
-            }
-        }
-
-        if (!hasBow && !hasCrossbow && !hasMeleeWeapon && !hasSpells) {
-            hasMeleeWeapon = true; // Unarmed / fists
-        }
-
-        // Ensure ammo is equipped if wielding a bow or crossbow
-        if (hasBow || hasCrossbow) {
-            if (!player->GetCurrentAmmo()) {
-                auto inv = player->GetInventory();
-                auto* equipMgr = RE::ActorEquipManager::GetSingleton();
-                if (equipMgr) {
-                    for (const auto& [boundObj, entryPair] : inv) {
-                        if (boundObj && boundObj->Is(RE::FormType::Ammo) && entryPair.first > 0) {
-                            equipMgr->EquipObject(player, boundObj);
-                            SKSE::log::info("Combat AI: Auto-equipped ammo {:08X} for bow/crossbow", boundObj->GetFormID());
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Combat style coefficients
-        float offensiveMult = _donorCombatStyle ? _donorCombatStyle->generalData.offensiveMult : 0.75f;
-        float defensiveMult = _donorCombatStyle ? _donorCombatStyle->generalData.defensiveMult : 0.5f;
-        float powerAttackMult = _donorCombatStyle ? _donorCombatStyle->meleeData.powerAttackIncapacitatedMult : 0.5f;
-        float bashMult = _donorCombatStyle ? _donorCombatStyle->meleeData.bashMult : 0.4f;
-
-        if (!pc) return;
-        auto& pcd = pc->data;
-
-        auto now = std::chrono::steady_clock::now();
-        float actionElapsed = std::chrono::duration<float>(now - _lastCombatActionTime).count();
-
-        // 5. Bow Draw & Release handling
-        if (_bowDrawn.load(std::memory_order_acquire)) {
-            float drawElapsed = std::chrono::duration<float>(now - _bowDrawTime).count();
-            float requiredDraw = hasCrossbow ? 0.3f : 1.2f;
-
-            if (drawElapsed >= requiredDraw) {
-                player->NotifyAnimationGraph("attackRelease");
-                player->NotifyAnimationGraph("arrowRelease");
-                bool relAnim = RE::CombatAnimation::Execute(player, target, RE::CombatAnimation::ANIM::kActionRightRelease);
-                _bowDrawn.store(false, std::memory_order_release);
-                _lastCombatActionTime = now;
-                _currentActionCooldown = 1.3f;
-                SKSE::log::info("Combat AI: Released arrow/bolt at target {:08X} (dist: {:.1f}, exec={})",
-                    target->GetFormID(), fullDist, relAnim);
-            }
-            pcd.autoMove = false;
-            pcd.moveInputVec = { 0.0f, 0.0f };
-            return;
-        }
-
-        // 6. Block Release handling
-        if (_isBlocking) {
-            if (actionElapsed >= _blockDuration) {
-                player->NotifyAnimationGraph("blockStop");
-                _isBlocking = false;
-                _lastCombatActionTime = now;
-                _currentActionCooldown = 0.5f;
-                // Immediate counter-strike or bash
-                if (hasShield && bashMult > 0.35f && (std::rand() % 100 < 50)) {
-                    player->NotifyAnimationGraph("blockBash");
-                } else {
-                    RE::CombatAnimation::Execute(player, target, RE::CombatAnimation::ANIM::kActionRightAttack);
-                    player->NotifyAnimationGraph("attackStart");
-                }
-            }
-            pcd.autoMove = false;
-            pcd.moveInputVec = { 0.0f, 0.0f };
-            return;
-        }
-
-        // 7. Tactical Movement (using autoMove without corrupting user's running toggle)
-        if (hasBow || hasCrossbow) {
-            if (fullDist > 1400.0f) {
-                pcd.autoMove = true;
-            } else {
-                pcd.autoMove = false;
-                pcd.moveInputVec = { 0.0f, 0.0f };
-            }
-        } else if (hasSpells && !hasMeleeWeapon) {
-            if (fullDist > 1000.0f) {
-                pcd.autoMove = true;
-            } else {
-                pcd.autoMove = false;
-                pcd.moveInputVec = { 0.0f, 0.0f };
-            }
-        } else {
-            // Melee / unarmed
-            if (fullDist > 140.0f) {
-                pcd.autoMove = true;
-            } else {
-                pcd.autoMove = false;
-                pcd.moveInputVec = { 0.0f, 0.0f };
-            }
-        }
-
-        // 8. Action Execution
-        if (actionElapsed < _currentActionCooldown) {
-            return;
-        }
-
-        // Bow / Crossbow attack
-        if (hasBow || hasCrossbow) {
-            if (fullDist <= 1800.0f) {
-                _bowDrawn.store(true, std::memory_order_release);
-                _bowDrawTime = now;
-                _lastCombatActionTime = now;
-
-                if (hasCrossbow) {
-                    player->NotifyAnimationGraph("crossbowAttackStart");
-                } else {
-                    player->NotifyAnimationGraph("bowAttackStart");
-                }
-                player->NotifyAnimationGraph("attackStart");
-                bool ok = RE::CombatAnimation::Execute(player, target, RE::CombatAnimation::ANIM::kActionRightAttack);
-
-                SKSE::log::info("Combat AI: Drawing {} on target {:08X} (dist: {:.1f}, exec={})",
-                    hasCrossbow ? "crossbow" : "bow", target->GetFormID(), fullDist, ok);
-                return;
-            }
-        }
-
-        // Spell casting
-        if (hasSpells) {
-            if (fullDist <= 1200.0f) {
-                auto* avOwner = player->AsActorValueOwner();
-                float curHealth = avOwner ? avOwner->GetActorValue(RE::ActorValue::kHealth) : 100.0f;
-                float maxHealth = avOwner ? avOwner->GetPermanentActorValue(RE::ActorValue::kHealth) : 100.0f;
-                bool needHeal = (maxHealth > 0.0f && (curHealth / maxHealth) < 0.6f);
-
-                auto isHealSpell = [](RE::SpellItem* sp) {
-                    if (!sp) return false;
-                    for (auto* eff : sp->effects) {
-                        if (eff && eff->baseEffect) {
-                            if (eff->baseEffect->data.primaryAV == RE::ActorValue::kHealth &&
-                                (eff->baseEffect->data.archetype == RE::EffectArchetypes::ArchetypeID::kValueModifier ||
-                                 eff->baseEffect->data.archetype == RE::EffectArchetypes::ArchetypeID::kPeakValueModifier)) {
-                                return true;
-                            }
-                        }
-                    }
-                    return false;
-                };
-
-                bool casted = false;
-                if (leftSpell) {
-                    auto* leftCaster = player->GetMagicCaster(RE::MagicSystem::CastingSource::kLeftHand);
-                    if (leftCaster) {
-                        RE::TESObjectREFR* castTarget = (needHeal && isHealSpell(leftSpell)) ? static_cast<RE::TESObjectREFR*>(player) : static_cast<RE::TESObjectREFR*>(target);
-                        leftCaster->CastSpellImmediate(leftSpell, false, castTarget, 1.0f, false, 0.0f, player);
-                        player->NotifyAnimationGraph("castStart");
-                        casted = true;
-                    }
-                }
-                if (rightSpell && !casted) {
-                    auto* rightCaster = player->GetMagicCaster(RE::MagicSystem::CastingSource::kRightHand);
-                    if (rightCaster) {
-                        RE::TESObjectREFR* castTarget = (needHeal && isHealSpell(rightSpell)) ? static_cast<RE::TESObjectREFR*>(player) : static_cast<RE::TESObjectREFR*>(target);
-                        rightCaster->CastSpellImmediate(rightSpell, false, castTarget, 1.0f, false, 0.0f, player);
-                        player->NotifyAnimationGraph("castStart");
-                        casted = true;
-                    }
-                }
-                if (casted) {
-                    _currentActionCooldown = 1.2f + (1.0f - offensiveMult) * 0.5f;
-                    _lastCombatActionTime = now;
-                    SKSE::log::info("Combat AI: Cast spell on target {:08X} (dist: {:.1f})", target->GetFormID(), fullDist);
-                    return;
-                }
-            }
-        }
-
-        // Melee attack
-        if (hasMeleeWeapon || (!hasBow && !hasCrossbow && !hasSpells)) {
-            if (fullDist <= 190.0f) {
-                // Check if target is attacking and we should block
-                bool targetAttacking = target->IsAttacking() || target->IsPowerAttacking();
-                float blockRoll = static_cast<float>(std::rand() % 100) / 100.0f;
-                if (targetAttacking && (hasShield || hasMeleeWeapon) && (blockRoll < defensiveMult * 0.7f)) {
-                    player->NotifyAnimationGraph("blockStart");
-                    _isBlocking = true;
-                    _blockDuration = 0.5f + (std::rand() % 35) / 100.0f;
-                    _lastCombatActionTime = now;
-                    _currentActionCooldown = _blockDuration;
-                    SKSE::log::info("Combat AI: Blocking incoming attack from target {:08X}", target->GetFormID());
-                    return;
-                }
-
-                // Offensive attack
-                auto* avOwner = player->AsActorValueOwner();
-                float stam = avOwner ? avOwner->GetActorValue(RE::ActorValue::kStamina) : 100.0f;
-                float paRoll = static_cast<float>(std::rand() % 100) / 100.0f;
-                if (stam > 35.0f && (paRoll < powerAttackMult * 0.5f * offensiveMult)) {
-                    bool ok = RE::CombatAnimation::Execute(player, target, RE::CombatAnimation::ANIM::kActionRightPowerAttack);
-                    if (!ok) {
-                        player->NotifyAnimationGraph("attackPowerStart");
-                    }
-                    _currentActionCooldown = 1.35f;
-                    SKSE::log::info("Combat AI: Executed power attack on target {:08X} (dist: {:.1f}, exec={})",
-                        target->GetFormID(), fullDist, ok);
-                } else {
-                    bool ok = RE::CombatAnimation::Execute(player, target, RE::CombatAnimation::ANIM::kActionRightAttack);
-                    if (!ok) {
-                        player->NotifyAnimationGraph("attackStart");
-                    }
-                    _currentActionCooldown = 0.85f + (1.0f - offensiveMult) * 0.35f;
-                    SKSE::log::info("Combat AI: Executed normal attack on target {:08X} (dist: {:.1f}, exec={})",
-                        target->GetFormID(), fullDist, ok);
-                }
-                _lastCombatActionTime = now;
-            }
-        }
-    }
-
 }
-
-

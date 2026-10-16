@@ -3,7 +3,6 @@
 #include "AliasManager.h"
 #include "FaceManager.h"
 #include "InventoryManager.h"
-#include "FactionManager.h"
 #include "StatManager.h"
 #include "IdleAIManager.h"
 #include "ImpersonationManager.h"
@@ -32,19 +31,15 @@ namespace AlternateActors::Papyrus {
         return InventoryManager::GetSingleton().RestoreAndTransferFromPlayer(a_player, a_donor, a_storageFollower);
     }
 
-    bool TransferFactions(RE::StaticFunctionTag*, RE::Actor* a_donor, RE::Actor* a_player) {
-        return FactionManager::GetSingleton().TransferFactionsToPlayer(a_player, a_donor);
+    bool TransferFactions(RE::StaticFunctionTag*, RE::Actor*, RE::Actor*) {
+        return true;
     }
 
-    bool RestoreFactions(RE::StaticFunctionTag*, RE::Actor* a_player) {
-        return FactionManager::GetSingleton().RestoreFactionsFromPlayer(a_player);
+    bool RestoreFactions(RE::StaticFunctionTag*, RE::Actor*) {
+        return true;
     }
 
-    bool CopyFactions(RE::StaticFunctionTag*, RE::Actor* a_fromActor, RE::Actor* a_toActor) {
-        if (!a_fromActor || !a_toActor) return false;
-        auto factions = FactionManager::GetSingleton().GetActorFactions(a_fromActor);
-        auto* crimeFaction = a_fromActor->GetCrimeFaction();
-        FactionManager::GetSingleton().SetActorFactions(a_toActor, factions, crimeFaction);
+    bool CopyFactions(RE::StaticFunctionTag*, RE::Actor*, RE::Actor*) {
         return true;
     }
 
@@ -64,7 +59,6 @@ namespace AlternateActors::Papyrus {
         if (!a_donor || !a_player) return false;
         FaceManager::GetSingleton().CloneAppearance(a_donor, a_player);
         StatManager::GetSingleton().TransferStatsToPlayer(a_player, a_donor);
-        FactionManager::GetSingleton().TransferFactionsToPlayer(a_player, a_donor);
         InventoryManager::GetSingleton().StoreAndTransferToPlayer(a_player, a_donor, a_storageFollower);
         return true;
     }
@@ -73,14 +67,10 @@ namespace AlternateActors::Papyrus {
         if (!a_player) return false;
         if (a_donor) {
             StatManager::GetSingleton().CopyStats(a_player, a_donor);
-            auto currentFactions = FactionManager::GetSingleton().GetActorFactions(a_player);
-            auto* crimeFaction = a_player->GetCrimeFaction();
-            FactionManager::GetSingleton().SetActorFactions(a_donor, currentFactions, crimeFaction);
         }
         FaceManager::GetSingleton().RevertAppearance(a_player);
         StatManager::GetSingleton().RestoreStatsFromPlayer(a_player);
         InventoryManager::GetSingleton().RestoreAndTransferFromPlayer(a_player, a_donor, a_storageFollower);
-        FactionManager::GetSingleton().RestoreFactionsFromPlayer(a_player);
         return true;
     }
 
@@ -88,8 +78,8 @@ namespace AlternateActors::Papyrus {
         IdleAIManager::GetSingleton().SetIdleAIEnabled(a_enabled);
     }
 
-    void SetCombatAIEnabled(RE::StaticFunctionTag*, bool a_enabled) {
-        IdleAIManager::GetSingleton().SetCombatAIEnabled(a_enabled);
+    void SetCombatAIEnabled(RE::StaticFunctionTag*, bool) {
+        // Combat AI subsystem removed per proxy system simplification (requirements_new.md)
     }
 
     void SetIdleAITimeout(RE::StaticFunctionTag*, float a_seconds) {

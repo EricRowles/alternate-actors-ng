@@ -22,8 +22,6 @@ add_library(${PROJECT_NAME} SHARED
     src/AliasManager.cpp
     src/FaceManager.h
     src/FaceManager.cpp
-    src/FactionManager.h
-    src/FactionManager.cpp
     src/InventoryManager.h
     src/InventoryManager.cpp
     src/StatManager.h

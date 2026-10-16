@@ -14,25 +14,7 @@ namespace AlternateActors {
     };
 
 
-    enum class PackageRetargetType : std::uint8_t {
-        kPackLocHandle,
-        kPackLocObject,
-        kPackTargHandle,
-        kPackTargObject,
-        kCustomLocHandle,
-        kCustomLocObject,
-        kCustomTargHandle,
-        kCustomTargObject
-    };
 
-    struct PackageRetargetRecord {
-        RE::TESPackage* package{ nullptr };
-        RE::FormID packageFormID{ 0 };
-        PackageRetargetType type{ PackageRetargetType::kPackLocHandle };
-        void* targetPtr{ nullptr };
-        RE::ObjectRefHandle origHandle;
-        RE::TESForm* origObject{ nullptr };
-    };
 
     class ImpersonationManager {
     public:
@@ -104,7 +86,7 @@ namespace AlternateActors {
 
 
         void Save(SKSE::SerializationInterface* a_serde);
-        void Load(SKSE::SerializationInterface* a_serde, std::uint32_t a_version, std::uint32_t a_length);
+        void Load(SKSE::SerializationInterface* a_serde, std::uint32_t a_length);
         void OnRevert();
         void OnPostLoadGame();
 
@@ -120,6 +102,11 @@ namespace AlternateActors {
         static void AttachSoundHandlesToHead(RE::Actor* a_actor);
         bool HandleProxyDialogueOutput(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused);
         void SyncDonorUpdatesToPlayer();
+        void ClearPlayerPackages();
+        RE::ObjectRefHandle GetCloneMarker() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _cloneMarker;
+        }
 
     private:
         ImpersonationManager() = default;
@@ -175,23 +162,6 @@ namespace AlternateActors {
         inline static REL::Relocation<GetEditorLocation2_t> _origPlayerGetEditorLocation2;
 
 
-        void RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player);
-        void RestorePackages();
-        void CheckAndRetargetLocation(
-            RE::TESPackage* a_pkg,
-            RE::PackageLocation* a_loc,
-            RE::Actor* a_donor,
-            RE::Actor* a_player,
-            PackageRetargetType a_handleType,
-            PackageRetargetType a_objType);
-        void CheckAndRetargetTarget(
-            RE::TESPackage* a_pkg,
-            RE::PackageTarget* a_targ,
-            RE::Actor* a_donor,
-            RE::Actor* a_player,
-            PackageRetargetType a_handleType,
-            PackageRetargetType a_objType);
-
         mutable std::recursive_mutex _mutex;
         std::atomic<bool> _active{ false };
         std::atomic<RE::Actor*> _donorActor{ nullptr };
@@ -207,6 +177,7 @@ namespace AlternateActors {
         std::string _donorName;
         std::string _origPlayerName;
         RE::ActorHandle _puppetHandle;
+        RE::ObjectRefHandle _cloneMarker;
 
         std::atomic<bool> _playerSpeaking{ false };
         std::atomic<bool> _inCompleteSpeaking{ false };
@@ -217,7 +188,6 @@ namespace AlternateActors {
         std::uint32_t _dialogueSoundID{ static_cast<std::uint32_t>(-1) };
 
         ImpersonationOptions _options;
-        std::vector<PackageRetargetRecord> _retargetedPackages;
         bool _hooksInstalled{ false };
     };
 

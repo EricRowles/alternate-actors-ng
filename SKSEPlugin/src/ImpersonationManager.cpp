@@ -2,7 +2,6 @@
 #include "ImpersonationManager.h"
 #include "AliasManager.h"
 #include "FaceManager.h"
-#include "FactionManager.h"
 #include "Serialization.h"
 #include "IdleAIManager.h"
 
@@ -98,18 +97,6 @@ namespace AlternateActors {
                 a_result = (origVoice && targetVoice && targetVoice == origVoice) ? 1.0 : 0.0;
                 return true;
             } else if constexpr (Cond == IdentityCondition::kGetInFaction) {
-                auto* targetFaction = static_cast<RE::TESFaction*>(a_p1);
-                if (targetFaction && player) {
-                    auto* extraFaction = player->extraList.GetByType<RE::ExtraFactionChanges>();
-                    if (extraFaction) {
-                        for (const auto& fRank : extraFaction->factionChanges) {
-                            if (fRank.faction == targetFaction) {
-                                a_result = (fRank.rank >= 0) ? 1.0 : 0.0;
-                                return true;
-                            }
-                        }
-                    }
-                }
                 if (donor) {
                     double donorRes = 0.0;
                     if (orig(donor, a_p1, a_p2, donorRes)) {
@@ -120,18 +107,6 @@ namespace AlternateActors {
                 a_result = 0.0;
                 return true;
             } else if constexpr (Cond == IdentityCondition::kGetFactionRank) {
-                auto* targetFaction = static_cast<RE::TESFaction*>(a_p1);
-                if (targetFaction && player) {
-                    auto* extraFaction = player->extraList.GetByType<RE::ExtraFactionChanges>();
-                    if (extraFaction) {
-                        for (const auto& fRank : extraFaction->factionChanges) {
-                            if (fRank.faction == targetFaction) {
-                                a_result = static_cast<double>(fRank.rank);
-                                return true;
-                            }
-                        }
-                    }
-                }
                 if (donor) {
                     double donorRes = -1.0;
                     if (orig(donor, a_p1, a_p2, donorRes)) {
@@ -187,25 +162,9 @@ namespace AlternateActors {
                 a_result = (origVoice && targetVoice && targetVoice == origVoice) ? 1.0 : 0.0;
                 return true;
             } else if constexpr (Cond == IdentityCondition::kGetInFaction) {
-                auto* targetFaction = static_cast<RE::TESFaction*>(a_p1);
-                for (const auto& fRec : FactionManager::GetSingleton().GetSavedPlayerFactions()) {
-                    if (fRec.faction == targetFaction) {
-                        a_result = (fRec.rank >= 0) ? 1.0 : 0.0;
-                        return true;
-                    }
-                }
-                a_result = 0.0;
-                return true;
+                return orig(player ? player : a_thisObj, a_p1, a_p2, a_result);
             } else if constexpr (Cond == IdentityCondition::kGetFactionRank) {
-                auto* targetFaction = static_cast<RE::TESFaction*>(a_p1);
-                for (const auto& fRec : FactionManager::GetSingleton().GetSavedPlayerFactions()) {
-                    if (fRec.faction == targetFaction) {
-                        a_result = static_cast<double>(fRec.rank);
-                        return true;
-                    }
-                }
-                a_result = -1.0;
-                return true;
+                return orig(player ? player : a_thisObj, a_p1, a_p2, a_result);
             } else if constexpr (Cond == IdentityCondition::kGetIsReference) {
                 auto* targetRef = static_cast<RE::TESObjectREFR*>(a_p1);
                 if (player && targetRef && targetRef == player) {
@@ -220,6 +179,72 @@ namespace AlternateActors {
 
         // 3. Normal evaluation for all other actors
         return orig(a_thisObj, a_p1, a_p2, a_result);
+    }
+
+    // --- Category B: Spatial Condition Proxying ---
+    enum class SpatialCondition : std::uint8_t {
+        kGetInCell = 0,
+        kGetInCurrentLoc,
+        kGetDistance,
+        kIsInInterior,
+        kGetInSameCell,
+        kGetInWorldspace,
+        kGetPos,
+        kGetHeadingAngle,
+        kGetAngle,
+        kTotal
+    };
+
+    static std::array<RE::SCRIPT_FUNCTION::Condition_t*, static_cast<std::size_t>(SpatialCondition::kTotal)> s_originalSpatialConditions{ nullptr };
+
+    template <SpatialCondition Cond>
+    static bool SpatialConditionThunk(RE::TESObjectREFR* a_thisObj, void* a_p1, void* a_p2, double& a_result) {
+        auto& mgr = ImpersonationManager::GetSingleton();
+        constexpr auto idx = static_cast<std::size_t>(Cond);
+        auto* orig = s_originalSpatialConditions[idx];
+        if (!orig) return false;
+        if (!mgr.IsConditionsEnabled()) {
+            return orig(a_thisObj, a_p1, a_p2, a_result);
+        }
+
+        auto* player = mgr.GetPlayer();
+        if (!player) {
+            player = RE::PlayerCharacter::GetSingleton();
+        }
+        auto* donor = mgr.GetDonor();
+
+        auto* evalThis = a_thisObj;
+        auto* evalP1 = a_p1;
+
+        // If condition is running on donor, proxy spatial evaluation to player
+        if (donor && evalThis == donor) {
+            evalThis = player;
+        }
+
+        // For conditions taking a target reference as parameter
+        if constexpr (Cond == SpatialCondition::kGetDistance ||
+                      Cond == SpatialCondition::kGetInSameCell ||
+                      Cond == SpatialCondition::kGetHeadingAngle) {
+            if (donor && evalP1 == donor) {
+                evalP1 = player;
+            }
+
+            // If evaluating player relative to player (e.g. idle dialogue "player nearby" or proxying donor to player)
+            if (evalThis == player && evalP1 == player) {
+                if constexpr (Cond == SpatialCondition::kGetDistance) {
+                    a_result = 0.0;
+                    return true;
+                } else if constexpr (Cond == SpatialCondition::kGetInSameCell) {
+                    a_result = 1.0;
+                    return true;
+                } else if constexpr (Cond == SpatialCondition::kGetHeadingAngle) {
+                    a_result = 0.0;
+                    return true;
+                }
+            }
+        }
+
+        return orig(evalThis, evalP1, a_p2, a_result);
     }
 
     RE::BGSVoiceType* ImpersonationManager::GetNPCVoiceType(const RE::TESNPC* a_npc) {
@@ -472,71 +497,71 @@ namespace AlternateActors {
         auto* player = GetPlayer();
         if (!donor || !player) return;
 
-        // 1. Sync any updated aliases
-        AliasManager::GetSingleton().SwapAliasesToPlayer(donor, player);
+        if (!IdleAIManager::GetSingleton().IsAIActive()) {
+            return;
+        }
 
-        // 2. Sync AI packages from donor to player base
+        // Sync AI packages from donor to player base
         auto* donorBase = donor->GetActorBase();
+        auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
+        if (donorBase && playerBase) {
+            std::vector<RE::TESPackage*> donorPkgs;
 
-            auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
-            if (donorBase && playerBase) {
-                std::vector<RE::TESPackage*> donorPkgs;
-
-                // Priority 1: Quest alias packages (MG01, etc.)
-                auto aliasPkgs = AliasManager::GetSingleton().GetAliasPackages(donor);
-                for (auto* pkg : aliasPkgs) {
-                    if (pkg) {
-                        donorPkgs.push_back(pkg);
-                    }
+            // Priority 1: Quest alias packages (MG01, etc.)
+            auto aliasPkgs = AliasManager::GetSingleton().GetAliasPackages(donor);
+            for (auto* pkg : aliasPkgs) {
+                if (pkg) {
+                    donorPkgs.push_back(pkg);
                 }
+            }
 
-                // Priority 2: Base NPC packages
-                for (auto* pkg : donorBase->aiPackages.packages) {
-                    if (pkg) {
-                        bool alreadyAdded = false;
-                        for (auto* p : donorPkgs) {
-                            if (p == pkg) {
-                                alreadyAdded = true;
-                                break;
-                            }
-                        }
-                        if (!alreadyAdded) {
-                            donorPkgs.push_back(pkg);
-                        }
-                    }
-                }
-
-                // Priority 3: Fallback sandbox
-                auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
-                if (defaultSandbox) {
-                    bool hasSandbox = false;
-                    for (auto* pkg : donorPkgs) {
-                        if (pkg == defaultSandbox) {
-                            hasSandbox = true;
+            // Priority 2: Base NPC packages
+            for (auto* pkg : donorBase->aiPackages.packages) {
+                if (pkg) {
+                    bool alreadyAdded = false;
+                    for (auto* p : donorPkgs) {
+                        if (p == pkg) {
+                            alreadyAdded = true;
                             break;
                         }
                     }
-                    if (!hasSandbox) {
-                        donorPkgs.push_back(defaultSandbox);
+                    if (!alreadyAdded) {
+                        donorPkgs.push_back(pkg);
                     }
-                }
-
-                std::vector<RE::TESPackage*> playerPkgs;
-                for (auto* pkg : playerBase->aiPackages.packages) {
-                    if (pkg) {
-                        playerPkgs.push_back(pkg);
-                    }
-                }
-
-                if (donorPkgs != playerPkgs) {
-                    playerBase->aiPackages.packages.clear();
-                    for (auto it = donorPkgs.rbegin(); it != donorPkgs.rend(); ++it) {
-                        playerBase->aiPackages.packages.push_front(*it);
-                    }
-                    player->EvaluatePackage(false, false);
-                    SKSE::log::info("Synchronized updated donor AI packages to player.");
                 }
             }
+
+            // Priority 3: Fallback sandbox
+            auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
+            if (defaultSandbox) {
+                bool hasSandbox = false;
+                for (auto* pkg : donorPkgs) {
+                    if (pkg == defaultSandbox) {
+                        hasSandbox = true;
+                        break;
+                    }
+                }
+                if (!hasSandbox) {
+                    donorPkgs.push_back(defaultSandbox);
+                }
+            }
+
+            std::vector<RE::TESPackage*> playerPkgs;
+            for (auto* pkg : playerBase->aiPackages.packages) {
+                if (pkg) {
+                    playerPkgs.push_back(pkg);
+                }
+            }
+
+            if (donorPkgs != playerPkgs) {
+                playerBase->aiPackages.packages.clear();
+                for (auto it = donorPkgs.rbegin(); it != donorPkgs.rend(); ++it) {
+                    playerBase->aiPackages.packages.push_front(*it);
+                }
+                player->EvaluatePackage(false, false);
+                SKSE::log::info("Synchronized updated donor AI packages to player.");
+            }
+        }
     }
 
     bool ImpersonationManager::HandleProxyDialogueOutput(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused) {
@@ -861,6 +886,21 @@ namespace AlternateActors {
                         static_cast<std::uint32_t>(a_this->GetFormID()), (a_this == puppet), a_flag, a_forceGreet);
                     IdleAIManager::GetSingleton().SetInSelfDialogue(a_flag);
                     if (!a_flag && a_this == puppet) {
+                        // Forward dynamic faction changes from puppet to donor
+                        if (donor) {
+                            auto* extraFaction = puppet->extraList.GetByType<RE::ExtraFactionChanges>();
+                            if (extraFaction) {
+                                for (const auto& fRank : extraFaction->factionChanges) {
+                                    if (fRank.faction) {
+                                        donor->AddToFaction(fRank.faction, fRank.rank);
+                                        SKSE::log::info("Hook_SetDialogueWithPlayer: Forwarded faction {:08X} rank {} from puppet to donor.",
+                                            fRank.faction->GetFormID(), fRank.rank);
+                                    }
+                                }
+                                puppet->extraList.Remove(RE::ExtraDataType::kFactionChanges, extraFaction);
+                            }
+                        }
+
                         auto* topicMgr = RE::MenuTopicManager::GetSingleton();
                         if (topicMgr) {
                             if (topicMgr->speaker == a_this->GetHandle()) {
@@ -928,28 +968,26 @@ namespace AlternateActors {
         if (mgr.IsActive()) {
             auto* puppet = mgr.GetPuppet();
             auto* donor = mgr.GetDonor();
-            if ((puppet && targetRef == puppet) || (donor && targetRef == donor)) {
-                if (!AliasManager::IsModInternalQuest(quest)) {
-                    auto* player = RE::PlayerCharacter::GetSingleton();
-                    if (player && donor) {
-                        SKSE::log::info("Hook_ForceRefIntoAlias: Intercepted external quest {:08X} assigning alias ID {} to {} {:08X}. Redirecting to player {:08X} (donor {:08X}).",
-                            static_cast<std::uint32_t>(quest->GetFormID()),
-                            aliasID,
-                            (targetRef == puppet) ? "puppet" : "donor",
-                            static_cast<std::uint32_t>(targetRef->GetFormID()),
-                            static_cast<std::uint32_t>(player->GetFormID()),
-                            static_cast<std::uint32_t>(donor->GetFormID()));
+            if (puppet && targetRef == puppet && !AliasManager::IsModInternalQuest(quest)) {
+                if (donor) {
+                    SKSE::log::info("Hook_ForceRefIntoAlias: Intercepted external quest {:08X} assigning alias ID {} to puppet {:08X}. Redirecting to donor {:08X}.",
+                        static_cast<std::uint32_t>(quest->GetFormID()),
+                        aliasID,
+                        static_cast<std::uint32_t>(targetRef->GetFormID()),
+                        static_cast<std::uint32_t>(donor->GetFormID()));
 
-                        if (!AliasManager::GetSingleton().HasRecord(quest->GetFormID(), aliasID)) {
-                            SwappedAliasRecord record;
-                            record.questFormID = quest->GetFormID();
-                            record.aliasID = aliasID;
-                            record.originalActorFormID = donor->GetFormID();
-                            AliasManager::GetSingleton().AddRecord(record);
+                    auto* alias = (aliasID < quest->aliases.size()) ? quest->aliases[aliasID] : nullptr;
+                    if (alias) {
+                        std::string aliasName = alias->aliasName.c_str();
+                        std::transform(aliasName.begin(), aliasName.end(), aliasName.begin(), ::tolower);
+                        if (aliasName.find("follower") != std::string::npos || aliasName.find("hireling") != std::string::npos) {
+                            donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+                            SKSE::log::info("Hook_ForceRefIntoAlias: Set kPlayerTeammate on donor {:08X} for alias '{}'",
+                                donor->GetFormID(), alias->aliasName.c_str());
                         }
-
-                        a_ctx.R8 = reinterpret_cast<DWORD64>(player);
                     }
+
+                    a_ctx.R8 = reinterpret_cast<DWORD64>(donor);
                 }
             }
         }
@@ -1018,10 +1056,35 @@ namespace AlternateActors {
         if (hookEntry(IdentityCondition::kGetIsVoiceType, "GetIsVoiceType"sv, &IdentityThunk<IdentityCondition::kGetIsVoiceType>)) hookedCount++;
         if (hookEntry(IdentityCondition::kIsInList, "IsInList"sv, &IdentityThunk<IdentityCondition::kIsInList>)) hookedCount++;
 
+        auto hookSpatialEntry = [](SpatialCondition cond, std::string_view name, RE::SCRIPT_FUNCTION::Condition_t* thunk) {
+            auto* func = RE::SCRIPT_FUNCTION::LocateScriptCommand(name);
+            if (func) {
+                auto idx = static_cast<std::size_t>(cond);
+                s_originalSpatialConditions[idx] = func->conditionFunction;
+                REL::safe_write(reinterpret_cast<std::uintptr_t>(&func->conditionFunction), reinterpret_cast<std::uintptr_t>(thunk));
+                SKSE::log::info("Hooked spatial condition '{}' via LocateScriptCommand (orig: {:016X})",
+                    name, reinterpret_cast<std::uintptr_t>(s_originalSpatialConditions[idx]));
+                return true;
+            } else {
+                SKSE::log::error("Failed to locate script command '{}'!", name);
+                return false;
+            }
+        };
+
+        if (hookSpatialEntry(SpatialCondition::kGetInCell, "GetInCell"sv, &SpatialConditionThunk<SpatialCondition::kGetInCell>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetInCurrentLoc, "GetInCurrentLoc"sv, &SpatialConditionThunk<SpatialCondition::kGetInCurrentLoc>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetDistance, "GetDistance"sv, &SpatialConditionThunk<SpatialCondition::kGetDistance>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kIsInInterior, "IsInInterior"sv, &SpatialConditionThunk<SpatialCondition::kIsInInterior>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetInSameCell, "GetInSameCell"sv, &SpatialConditionThunk<SpatialCondition::kGetInSameCell>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetInWorldspace, "GetInWorldspace"sv, &SpatialConditionThunk<SpatialCondition::kGetInWorldspace>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetPos, "GetPos"sv, &SpatialConditionThunk<SpatialCondition::kGetPos>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetHeadingAngle, "GetHeadingAngle"sv, &SpatialConditionThunk<SpatialCondition::kGetHeadingAngle>)) hookedCount++;
+        if (hookSpatialEntry(SpatialCondition::kGetAngle, "GetAngle"sv, &SpatialConditionThunk<SpatialCondition::kGetAngle>)) hookedCount++;
+
         SKSE::log::info("Successfully installed {} script condition hooks via CommonLibSSE-NG.", hookedCount);
 
         _hooksInstalled = true;
-        SKSE::log::info("Installed Impersonation identity condition function hooks and dialogue vfunc hooks successfully.");
+        SKSE::log::info("Installed Impersonation identity and spatial condition function hooks and dialogue vfunc hooks successfully.");
     }
 
     void ImpersonationManager::Initialize() {
@@ -1036,6 +1099,14 @@ namespace AlternateActors {
             SKSE::log::info("Resolved puppet base forms: male={:08X}, female={:08X}",
                 malePuppet ? malePuppet->GetFormID() : 0,
                 femalePuppet ? femalePuppet->GetFormID() : 0);
+
+            auto* marker = dataHandler->LookupForm<RE::TESObjectREFR>(0x00000D97, "Alternate Actors NG.esp"sv);
+            if (marker) {
+                _cloneMarker = marker->GetHandle();
+                SKSE::log::info("Resolved clone marker: {:08X}", marker->GetFormID());
+            } else {
+                SKSE::log::warn("Failed to resolve clone marker 0x00000D97 from Alternate Actors NG.esp!");
+            }
         }
     }
 
@@ -1102,11 +1173,8 @@ namespace AlternateActors {
             static_cast<std::uint32_t>(a_player->GetFormID())
         );
 
-        // Layer 2: Quest Aliases
-        AliasManager::GetSingleton().SwapAliasesToPlayer(a_donor, a_player);
-
-        // Layer 3: AI Packages
-        RetargetPackages(a_donor, a_player);
+        // Clear packages from player
+        ClearPlayerPackages();
 
         return 1;
     }
@@ -1124,11 +1192,13 @@ namespace AlternateActors {
             donor ? static_cast<std::uint32_t>(donor->GetFormID()) : static_cast<std::uint32_t>(_savedDonorFormID)
         );
 
-        // Layer 3: AI Packages
-        RestorePackages();
-
-        // Layer 2: Quest Aliases
-        AliasManager::GetSingleton().RestoreAliases();
+        // Clear packages from player
+        ClearPlayerPackages();
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (pc) {
+            pc->SetAIDriven(false);
+            pc->EvaluatePackage(false, false);
+        }
 
         // Restore player's original name
         if (player && !_origPlayerName.empty()) {
@@ -1237,6 +1307,15 @@ namespace AlternateActors {
         if (auto* puppet = GetPuppet()) {
             if (a_follows) {
                 puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+                if (_active.load(std::memory_order_acquire)) {
+                    auto* player = RE::PlayerCharacter::GetSingleton();
+                    if (player) {
+                        if (puppet->GetParentCell() != player->GetParentCell() || puppet->GetPosition().GetDistance(player->GetPosition()) > 1000.0f) {
+                            puppet->MoveTo(player);
+                            SKSE::log::info("SetPuppetFollowsPlayer: Teleported puppet to player.");
+                        }
+                    }
+                }
             } else {
                 puppet->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kPlayerTeammate);
             }
@@ -1264,6 +1343,30 @@ namespace AlternateActors {
             }
         }
 
+        // Donor holding-cell leash
+        if (_active.load(std::memory_order_acquire)) {
+            auto* donor = GetDonor();
+            auto markerHandle = _cloneMarker;
+            auto marker = markerHandle.get();
+            if (donor && marker) {
+                bool needsLeash = false;
+                if (donor->GetParentCell() != marker->GetParentCell()) {
+                    needsLeash = true;
+                } else if (donor->GetPosition().GetDistance(marker->GetPosition()) > 500.0f) {
+                    needsLeash = true;
+                }
+
+                if (needsLeash) {
+                    donor->MoveTo(marker.get());
+                    SKSE::log::info("Tick: Donor {:08X} moved away from holding marker; leashed back.",
+                        donor->GetFormID());
+                    if (IdleAIManager::GetSingleton().IsAIActive()) {
+                        SyncDonorUpdatesToPlayer();
+                    }
+                }
+            }
+        }
+
         // Check if player has an active dialogue/force-greet package targeting puppet
         if (IdleAIManager::GetSingleton().IsAIActive()) {
             auto* player = RE::PlayerCharacter::GetSingleton();
@@ -1283,215 +1386,14 @@ namespace AlternateActors {
         }
     }
 
-    // --- Layer 3: AI Packages Retargeting ---
-    void ImpersonationManager::CheckAndRetargetLocation(
-        RE::TESPackage* a_pkg,
-        RE::PackageLocation* a_loc,
-        RE::Actor* a_donor,
-        RE::Actor* a_player,
-        PackageRetargetType a_handleType,
-        PackageRetargetType a_objType)
-    {
-        if (!a_pkg || !a_loc || !a_donor || !a_player) return;
-        if (reinterpret_cast<std::uintptr_t>(a_loc) < 0x10000) return;
-
-        auto donorHandle = a_donor->GetHandle();
-        auto playerHandle = a_player->GetHandle();
-        auto* donorBase = a_donor->GetBaseObject();
-        auto* donorActorBase = a_donor->GetActorBase();
-        auto* playerBase = a_player->GetBaseObject();
-
-        if (a_loc->locType == RE::PackageLocation::Type::kNearReference) {
-            if (a_loc->data.refHandle == donorHandle) {
-                PackageRetargetRecord rec;
-                rec.package = a_pkg;
-                rec.packageFormID = a_pkg->GetFormID();
-                rec.type = a_handleType;
-                rec.targetPtr = a_loc;
-                rec.origHandle = a_loc->data.refHandle;
-                rec.origObject = nullptr;
-                _retargetedPackages.push_back(rec);
-
-                a_loc->data.refHandle = playerHandle;
-            }
-        } else if (a_loc->locType == RE::PackageLocation::Type::kObjectID) {
-            if (a_loc->data.object == donorBase || a_loc->data.object == donorActorBase || a_loc->data.object == a_donor) {
-                PackageRetargetRecord rec;
-                rec.package = a_pkg;
-                rec.packageFormID = a_pkg->GetFormID();
-                rec.type = a_objType;
-                rec.targetPtr = a_loc;
-                rec.origHandle.reset();
-                rec.origObject = a_loc->data.object;
-                _retargetedPackages.push_back(rec);
-
-                a_loc->data.object = playerBase;
-            }
-        }
-    }
-
-    void ImpersonationManager::CheckAndRetargetTarget(
-        RE::TESPackage* a_pkg,
-        RE::PackageTarget* a_targ,
-        RE::Actor* a_donor,
-        RE::Actor* a_player,
-        PackageRetargetType a_handleType,
-        PackageRetargetType a_objType)
-    {
-        if (!a_pkg || !a_targ || !a_donor || !a_player) return;
-        if (reinterpret_cast<std::uintptr_t>(a_targ) < 0x10000) return;
-
-        auto donorHandle = a_donor->GetHandle();
-        auto playerHandle = a_player->GetHandle();
-        auto* donorBase = a_donor->GetBaseObject();
-        auto* donorActorBase = a_donor->GetActorBase();
-        auto* playerBase = a_player->GetBaseObject();
-
-        auto* puppet = GetPuppet();
-        auto puppetHandle = puppet ? puppet->GetHandle() : RE::ActorHandle();
-        auto* puppetBase = puppet ? puppet->GetBaseObject() : nullptr;
-
-        if (a_targ->targType == 0) { // Specific Reference
-            if (a_targ->target.handle == donorHandle) {
-                PackageRetargetRecord rec;
-                rec.package = a_pkg;
-                rec.packageFormID = a_pkg->GetFormID();
-                rec.type = a_handleType;
-                rec.targetPtr = a_targ;
-                rec.origHandle = a_targ->target.handle;
-                rec.origObject = nullptr;
-                _retargetedPackages.push_back(rec);
-
-                a_targ->target.handle = playerHandle;
-            } else if (puppet && a_targ->target.handle == playerHandle) {
-                PackageRetargetRecord rec;
-                rec.package = a_pkg;
-                rec.packageFormID = a_pkg->GetFormID();
-                rec.type = a_handleType;
-                rec.targetPtr = a_targ;
-                rec.origHandle = a_targ->target.handle;
-                rec.origObject = nullptr;
-                _retargetedPackages.push_back(rec);
-
-                a_targ->target.handle = puppetHandle;
-                SKSE::log::info("Retargeted player-targeting package {:08X} to puppet {:08X}",
-                    a_pkg->GetFormID(), puppet->GetFormID());
-            }
-        } else if (a_targ->targType == 1) { // ObjectID
-            if (a_targ->target.object == donorBase || a_targ->target.object == donorActorBase || a_targ->target.object == a_donor) {
-                PackageRetargetRecord rec;
-                rec.package = a_pkg;
-                rec.packageFormID = a_pkg->GetFormID();
-                rec.type = a_objType;
-                rec.targetPtr = a_targ;
-                rec.origHandle.reset();
-                rec.origObject = a_targ->target.object;
-                _retargetedPackages.push_back(rec);
-
-                a_targ->target.object = playerBase;
-            } else if (puppet && puppetBase && (a_targ->target.object == playerBase || a_targ->target.object == a_player)) {
-                PackageRetargetRecord rec;
-                rec.package = a_pkg;
-                rec.packageFormID = a_pkg->GetFormID();
-                rec.type = a_objType;
-                rec.targetPtr = a_targ;
-                rec.origHandle.reset();
-                rec.origObject = a_targ->target.object;
-                _retargetedPackages.push_back(rec);
-
-                a_targ->target.object = puppetBase;
-                SKSE::log::info("Retargeted player-targeting object package {:08X} to puppet {:08X}",
-                    a_pkg->GetFormID(), puppet->GetFormID());
-            }
-        }
-    }
-
-    void ImpersonationManager::RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player) {
+    void ImpersonationManager::ClearPlayerPackages() {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (!a_donor || !a_player) return;
-
-        RestorePackages();
-
-        auto* dataHandler = RE::TESDataHandler::GetSingleton();
-        if (!dataHandler) return;
-
-        const auto& packages = dataHandler->GetFormArray<RE::TESPackage>();
-        for (auto* pkg : packages) {
-            if (!pkg) continue;
-
-            if (pkg->packLoc && reinterpret_cast<std::uintptr_t>(pkg->packLoc) >= 0x10000) {
-                CheckAndRetargetLocation(pkg, pkg->packLoc, a_donor, a_player, PackageRetargetType::kPackLocHandle, PackageRetargetType::kPackLocObject);
-            }
-            if (pkg->packTarg && reinterpret_cast<std::uintptr_t>(pkg->packTarg) >= 0x10000) {
-                CheckAndRetargetTarget(pkg, pkg->packTarg, a_donor, a_player, PackageRetargetType::kPackTargHandle, PackageRetargetType::kPackTargObject);
-            }
-
-            if (pkg->data) {
-                auto* customData = skyrim_cast<RE::TESCustomPackageData*>(pkg->data);
-                if (customData && customData->data.data) {
-                    for (std::uint16_t i = 0; i < customData->data.dataSize; ++i) {
-                        auto* entry = customData->data.data[i];
-                        if (!entry || reinterpret_cast<std::uintptr_t>(entry) < 0x10000) continue;
-
-                        auto vtbl = *reinterpret_cast<std::uintptr_t*>(entry);
-                        if (vtbl == RE::VTABLE_BGSPackageDataLocation[0].address()) {
-                            auto* locData = static_cast<RE::BGSPackageDataLocation*>(entry);
-                            if (locData && locData->pointer && reinterpret_cast<std::uintptr_t>(locData->pointer) >= 0x10000) {
-                                CheckAndRetargetLocation(pkg, locData->pointer, a_donor, a_player, PackageRetargetType::kCustomLocHandle, PackageRetargetType::kCustomLocObject);
-                            }
-                        }
-                    }
-                }
-            }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+        auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());
+        if (playerBase) {
+            playerBase->aiPackages.packages.clear();
         }
-
-        SKSE::log::info("Retargeted {} AI package locations/targets to player.", _retargetedPackages.size());
-    }
-
-    void ImpersonationManager::RestorePackages() {
-        std::lock_guard<std::recursive_mutex> lock(_mutex);
-        if (_retargetedPackages.empty()) return;
-
-        for (const auto& rec : _retargetedPackages) {
-            if (!rec.targetPtr || reinterpret_cast<std::uintptr_t>(rec.targetPtr) < 0x10000) continue;
-
-            if (rec.packageFormID != 0) {
-                auto* pkg = RE::TESForm::LookupByID<RE::TESPackage>(rec.packageFormID);
-                if (!pkg) {
-                    continue;
-                }
-            }
-
-            switch (rec.type) {
-                case PackageRetargetType::kPackLocHandle:
-                case PackageRetargetType::kCustomLocHandle: {
-                    auto* loc = static_cast<RE::PackageLocation*>(rec.targetPtr);
-                    loc->data.refHandle = rec.origHandle;
-                    break;
-                }
-                case PackageRetargetType::kPackLocObject:
-                case PackageRetargetType::kCustomLocObject: {
-                    auto* loc = static_cast<RE::PackageLocation*>(rec.targetPtr);
-                    loc->data.object = rec.origObject;
-                    break;
-                }
-                case PackageRetargetType::kPackTargHandle:
-                case PackageRetargetType::kCustomTargHandle: {
-                    auto* targ = static_cast<RE::PackageTarget*>(rec.targetPtr);
-                    targ->target.handle = rec.origHandle;
-                    break;
-                }
-                case PackageRetargetType::kPackTargObject:
-                case PackageRetargetType::kCustomTargObject: {
-                    auto* targ = static_cast<RE::PackageTarget*>(rec.targetPtr);
-                    targ->target.object = rec.origObject;
-                    break;
-                }
-            }
-        }
-
-        SKSE::log::info("Restored {} retargeted AI packages.", _retargetedPackages.size());
-        _retargetedPackages.clear();
     }
 
     // --- Co-Save Serialization ---
@@ -1531,7 +1433,7 @@ namespace AlternateActors {
         }
     }
 
-    void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t /*a_version*/, std::uint32_t a_length) {
+    void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t a_length) {
         if (!a_serde) return;
         std::lock_guard<std::recursive_mutex> lock(_mutex);
 
@@ -1621,7 +1523,7 @@ namespace AlternateActors {
 
     void ImpersonationManager::OnRevert() {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
-        RestorePackages();
+        ClearPlayerPackages();
         _active.store(false, std::memory_order_release);
         _donorActor.store(nullptr, std::memory_order_release);
         _playerActor.store(nullptr, std::memory_order_release);
@@ -1651,8 +1553,8 @@ namespace AlternateActors {
 
             auto* donor = _donorActor.load(std::memory_order_acquire);
             auto* player = _playerActor.load(std::memory_order_acquire);
-            if (donor && player) {
-                RetargetPackages(donor, player);
+            if (!player) {
+                player = RE::PlayerCharacter::GetSingleton();
             }
 
             if (donor) {

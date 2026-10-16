@@ -37,13 +37,6 @@ namespace AlternateActors {
         // 3D Rendered Skin Tint Color
         RE::NiColor skinTintColor{ 0.0f, 0.0f, 0.0f };
         bool hasSkinTintColor{ false };
-
-        // AI Behavior & Combat Data
-        RE::TESClass* npcClass{ nullptr };
-        RE::TESCombatStyle* combatStyle{ nullptr };
-        RE::BGSListForm* defaultPackList{ nullptr };
-        RE::AIDATA_GAME aiData{};
-        std::vector<RE::TESPackage*> packages;
     };
 
     class FaceManager {

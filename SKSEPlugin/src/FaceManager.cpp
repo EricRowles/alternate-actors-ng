@@ -1,6 +1,5 @@
 #include "PCH.h"
 #include "FaceManager.h"
-#include "AliasManager.h"
 #include "IdleAIManager.h"
 #include "ImpersonationManager.h"
 #include "RE/B/BSFaceGenNiNode.h"
@@ -135,24 +134,6 @@ namespace AlternateActors {
                 if (layer) {
                     a_outSnapshot.tintLayers.push_back(*layer);
                 }
-            }
-        }
-
-        // AI & Combat Profile Capture
-        a_outSnapshot.npcClass = npc->npcClass;
-        auto* extraStyle = a_actor->extraList.GetByType<RE::ExtraCombatStyle>();
-        if (extraStyle && extraStyle->combatStyle) {
-            a_outSnapshot.combatStyle = extraStyle->combatStyle;
-        } else {
-            a_outSnapshot.combatStyle = npc->combatStyle;
-        }
-        a_outSnapshot.defaultPackList = npc->defaultPackList;
-        a_outSnapshot.aiData = npc->aiData;
-
-        a_outSnapshot.packages.clear();
-        for (auto* pkg : npc->aiPackages.packages) {
-            if (pkg) {
-                a_outSnapshot.packages.push_back(pkg);
             }
         }
 
@@ -294,57 +275,6 @@ namespace AlternateActors {
                 }
             }
             targetNPC->tintLayers->clear();
-        }
-
-        // 7. AI Behavior & Combat Profile Transfer
-        targetNPC->npcClass = a_snapshot.npcClass;
-        targetNPC->combatStyle = a_snapshot.combatStyle;
-        if (a_snapshot.combatStyle) {
-            auto* extraStyle = a_targetActor->extraList.GetByType<RE::ExtraCombatStyle>();
-            if (extraStyle) {
-                extraStyle->combatStyle = a_snapshot.combatStyle;
-            }
-        }
-        auto& runtime = a_targetActor->GetActorRuntimeData();
-        if (runtime.combatController) {
-            runtime.combatController->combatStyle = a_snapshot.combatStyle;
-        }
-        targetNPC->defaultPackList = a_snapshot.defaultPackList;
-        targetNPC->aiData = a_snapshot.aiData;
-
-        // Preserve donor's exact package priority order (head-to-tail)
-        targetNPC->aiPackages.packages.clear();
-
-        // When transferring AI packages to the player, append DefaultSandboxCurrentLocation1024 (0x000BFB6B)
-        // at the tail as a universal fallback so autonomous idle AI can wander anywhere in Skyrim
-        if (a_targetActor && a_targetActor->IsPlayerRef() && a_snapshot.faceNPC != nullptr) {
-            auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
-            if (defaultSandbox) {
-                targetNPC->aiPackages.packages.push_front(defaultSandbox);
-            }
-        }
-
-        // Base NPC packages
-        for (auto it = a_snapshot.packages.rbegin(); it != a_snapshot.packages.rend(); ++it) {
-            if (*it) {
-                targetNPC->aiPackages.packages.push_front(*it);
-            }
-        }
-
-        // When applying to player, alias packages from the donor's quests must evaluate BEFORE base NPC packages
-        if (a_targetActor && a_targetActor->IsPlayerRef()) {
-            auto* donorActor = IdleAIManager::GetSingleton().GetActiveDonorActor();
-            if (!donorActor) {
-                donorActor = ImpersonationManager::GetSingleton().GetDonor();
-            }
-            if (donorActor) {
-                auto aliasPkgs = AliasManager::GetSingleton().GetAliasPackages(donorActor);
-                for (auto it = aliasPkgs.rbegin(); it != aliasPkgs.rend(); ++it) {
-                    if (*it) {
-                        targetNPC->aiPackages.packages.push_front(*it);
-                    }
-                }
-            }
         }
 
         // Resolve skin tint color for body tint

@@ -3,7 +3,6 @@
 #include "AliasManager.h"
 #include "FaceManager.h"
 #include "InventoryManager.h"
-#include "FactionManager.h"
 #include "StatManager.h"
 #include "IdleAIManager.h"
 #include "ImpersonationManager.h"
@@ -33,9 +32,6 @@ namespace AlternateActors::Serialization {
         RE::FormID faceNPCID = (a_face.faceNPC && a_face.faceNPC->GetFormID() != 0x07) ? a_face.faceNPC->GetFormID() : 0;
         RE::FormID hairColorID = a_face.hairColor ? a_face.hairColor->GetFormID() : 0;
         RE::FormID voiceTypeID = a_face.voiceType ? a_face.voiceType->GetFormID() : 0;
-        RE::FormID classID = a_face.npcClass ? a_face.npcClass->GetFormID() : 0;
-        RE::FormID combatStyleID = a_face.combatStyle ? a_face.combatStyle->GetFormID() : 0;
-        RE::FormID defaultPackListID = a_face.defaultPackList ? a_face.defaultPackList->GetFormID() : 0;
 
         a_serde->WriteRecordData(&raceID, sizeof(raceID));
         a_serde->WriteRecordData(&faceNPCID, sizeof(faceNPCID));
@@ -63,18 +59,6 @@ namespace AlternateActors::Serialization {
         a_serde->WriteRecordData(&a_face.hairTintColor.red, sizeof(a_face.hairTintColor.red));
         a_serde->WriteRecordData(&a_face.hairTintColor.green, sizeof(a_face.hairTintColor.green));
         a_serde->WriteRecordData(&a_face.hairTintColor.blue, sizeof(a_face.hairTintColor.blue));
-
-        a_serde->WriteRecordData(&classID, sizeof(classID));
-        a_serde->WriteRecordData(&combatStyleID, sizeof(combatStyleID));
-        a_serde->WriteRecordData(&defaultPackListID, sizeof(defaultPackListID));
-        a_serde->WriteRecordData(&a_face.aiData, sizeof(a_face.aiData));
-
-        std::uint32_t pkgCount = static_cast<std::uint32_t>(a_face.packages.size());
-        a_serde->WriteRecordData(&pkgCount, sizeof(pkgCount));
-        for (auto* pkg : a_face.packages) {
-            RE::FormID pkgID = pkg ? pkg->GetFormID() : 0;
-            a_serde->WriteRecordData(&pkgID, sizeof(pkgID));
-        }
 
         // Tint layers
         std::uint32_t tintCount = static_cast<std::uint32_t>(a_face.tintLayers.size());
@@ -105,31 +89,17 @@ namespace AlternateActors::Serialization {
     void SaveCallback(SKSE::SerializationInterface* a_serde) {
         if (!a_serde) return;
 
-        // 1. Save Swapped Aliases
-        const auto& swappedAliases = AliasManager::GetSingleton().GetRecords();
-        if (!swappedAliases.empty()) {
-            if (a_serde->OpenRecord(kAliasDataRecord, kSerializationVersion)) {
-                std::uint32_t count = static_cast<std::uint32_t>(swappedAliases.size());
-                a_serde->WriteRecordData(&count, sizeof(count));
-                for (const auto& record : swappedAliases) {
-                    a_serde->WriteRecordData(&record.questFormID, sizeof(record.questFormID));
-                    a_serde->WriteRecordData(&record.aliasID, sizeof(record.aliasID));
-                    a_serde->WriteRecordData(&record.originalActorFormID, sizeof(record.originalActorFormID));
-                }
-            }
-        }
-
-        // 2. Save Face Snapshot (Original appearance to revert to)
+        // 1. Save Face Snapshot (Original appearance to revert to)
         if (FaceManager::GetSingleton().HasSavedAppearance()) {
             WriteFaceSnapshotRecord(a_serde, kFaceDataRecord, FaceManager::GetSingleton().GetSavedAppearance());
         }
 
-        // 2b. Save Active Donor Face Snapshot
+        // 1b. Save Active Donor Face Snapshot
         if (FaceManager::GetSingleton().HasDonorAppearance()) {
             WriteFaceSnapshotRecord(a_serde, kDonorFaceDataRecord, FaceManager::GetSingleton().GetDonorAppearance());
         }
 
-        // 3. Save Dynamic Spells, Quest Items & Equipped Spells
+        // 2. Save Dynamic Spells, Quest Items & Equipped Spells
         const auto& transferredSpells = InventoryManager::GetSingleton().GetTransferredSpellIDs();
         const auto& savedPlayerSpells = InventoryManager::GetSingleton().GetSavedPlayerSpellIDs();
         const auto& donorQuestItems = InventoryManager::GetSingleton().GetTransferredDonorQuestItems();
@@ -169,24 +139,6 @@ namespace AlternateActors::Serialization {
             }
         }
 
-        // 4. Save Factions
-        if (FactionManager::GetSingleton().HasSavedFactions()) {
-            const auto& factions = FactionManager::GetSingleton().GetSavedPlayerFactions();
-            auto* crimeFaction = FactionManager::GetSingleton().GetSavedCrimeFaction();
-            if (a_serde->OpenRecord(kFactionDataRecord, kSerializationVersion)) {
-                RE::FormID crimeID = crimeFaction ? crimeFaction->GetFormID() : 0;
-                a_serde->WriteRecordData(&crimeID, sizeof(crimeID));
-
-                std::uint32_t count = static_cast<std::uint32_t>(factions.size());
-                a_serde->WriteRecordData(&count, sizeof(count));
-                for (const auto& rec : factions) {
-                    RE::FormID factID = rec.faction ? rec.faction->GetFormID() : 0;
-                    a_serde->WriteRecordData(&factID, sizeof(factID));
-                    a_serde->WriteRecordData(&rec.rank, sizeof(rec.rank));
-                }
-            }
-        }
-
         // 5. Save Stats
         if (StatManager::GetSingleton().HasSavedStats()) {
             const auto& stats = StatManager::GetSingleton().GetSavedPlayerStats();
@@ -204,16 +156,12 @@ namespace AlternateActors::Serialization {
         if (a_serde->OpenRecord(kIdleAIDataRecord, kSerializationVersion)) {
             bool enabled = IdleAIManager::GetSingleton().IsIdleAIEnabled();
             float timeout = IdleAIManager::GetSingleton().GetIdleTimeout();
-            std::int32_t unusedHotkey{ 0 };
             RE::FormID donorID = IdleAIManager::GetSingleton().GetActiveDonorActor() ?
                 IdleAIManager::GetSingleton().GetActiveDonorActor()->GetFormID() : 0;
-            bool combatAIEnabled = IdleAIManager::GetSingleton().IsCombatAIEnabled();
 
             a_serde->WriteRecordData(&enabled, sizeof(enabled));
             a_serde->WriteRecordData(&timeout, sizeof(timeout));
-            a_serde->WriteRecordData(&unusedHotkey, sizeof(unusedHotkey));
             a_serde->WriteRecordData(&donorID, sizeof(donorID));
-            a_serde->WriteRecordData(&combatAIEnabled, sizeof(combatAIEnabled));
         }
 
         // 7. Save Impersonation State
@@ -224,7 +172,6 @@ namespace AlternateActors::Serialization {
 
     static bool ReadFaceSnapshotRecord(SKSE::SerializationInterface* a_serde, FaceSnapshot& a_outFace) {
         RE::FormID raceID = 0, faceNPCID = 0, hairColorID = 0, voiceTypeID = 0;
-        RE::FormID classID = 0, combatStyleID = 0, defaultPackListID = 0;
 
         if (!a_serde->ReadRecordData(&raceID, sizeof(raceID))) return false;
         a_serde->ReadRecordData(&faceNPCID, sizeof(faceNPCID));
@@ -259,23 +206,6 @@ namespace AlternateActors::Serialization {
         a_serde->ReadRecordData(&a_outFace.hairTintColor.green, sizeof(a_outFace.hairTintColor.green));
         a_serde->ReadRecordData(&a_outFace.hairTintColor.blue, sizeof(a_outFace.hairTintColor.blue));
 
-        a_serde->ReadRecordData(&classID, sizeof(classID));
-        a_serde->ReadRecordData(&combatStyleID, sizeof(combatStyleID));
-        a_serde->ReadRecordData(&defaultPackListID, sizeof(defaultPackListID));
-        a_serde->ReadRecordData(&a_outFace.aiData, sizeof(a_outFace.aiData));
-
-        std::uint32_t pkgCount = 0;
-        if (a_serde->ReadRecordData(&pkgCount, sizeof(pkgCount))) {
-            for (std::uint32_t i = 0; i < pkgCount; ++i) {
-                RE::FormID pkgID = 0;
-                a_serde->ReadRecordData(&pkgID, sizeof(pkgID));
-                if (a_serde->ResolveFormID(pkgID, pkgID)) {
-                    auto* pkg = RE::TESForm::LookupByID<RE::TESPackage>(pkgID);
-                    if (pkg) a_outFace.packages.push_back(pkg);
-                }
-            }
-        }
-
         if (a_serde->ResolveFormID(raceID, raceID)) {
             a_outFace.race = RE::TESForm::LookupByID<RE::TESRace>(raceID);
         }
@@ -292,17 +222,8 @@ namespace AlternateActors::Serialization {
         if (a_serde->ResolveFormID(voiceTypeID, voiceTypeID)) {
             a_outFace.voiceType = RE::TESForm::LookupByID<RE::BGSVoiceType>(voiceTypeID);
         }
-        if (a_serde->ResolveFormID(classID, classID)) {
-            a_outFace.npcClass = RE::TESForm::LookupByID<RE::TESClass>(classID);
-        }
-        if (a_serde->ResolveFormID(combatStyleID, combatStyleID)) {
-            a_outFace.combatStyle = RE::TESForm::LookupByID<RE::TESCombatStyle>(combatStyleID);
-        }
-        if (a_serde->ResolveFormID(defaultPackListID, defaultPackListID)) {
-            a_outFace.defaultPackList = RE::TESForm::LookupByID<RE::BGSListForm>(defaultPackListID);
-        }
 
-        // Optional tint layers (v2+)
+        // Tint layers
         std::uint32_t tintCount = 0;
         if (a_serde->ReadRecordData(&tintCount, sizeof(tintCount))) {
             for (std::uint32_t i = 0; i < tintCount; ++i) {
@@ -313,7 +234,7 @@ namespace AlternateActors::Serialization {
             }
         }
 
-        // Optional skin tint color (v2+)
+        // Skin tint color
         if (a_serde->ReadRecordData(&a_outFace.hasSkinTintColor, sizeof(a_outFace.hasSkinTintColor))) {
             a_serde->ReadRecordData(&a_outFace.skinTintColor.red, sizeof(a_outFace.skinTintColor.red));
             a_serde->ReadRecordData(&a_outFace.skinTintColor.green, sizeof(a_outFace.skinTintColor.green));
@@ -328,7 +249,7 @@ namespace AlternateActors::Serialization {
             }
         }
 
-        // Optional face details texture set (v4+)
+        // Face details texture set
         RE::FormID faceDetailsID = 0;
         if (a_serde->ReadRecordData(&faceDetailsID, sizeof(faceDetailsID))) {
             if (faceDetailsID != 0 && a_serde->ResolveFormID(faceDetailsID, faceDetailsID)) {
@@ -355,23 +276,6 @@ namespace AlternateActors::Serialization {
             }
 
             switch (type) {
-                case kAliasDataRecord: {
-                    std::uint32_t count = 0;
-                    a_serde->ReadRecordData(&count, sizeof(count));
-                    for (std::uint32_t i = 0; i < count; ++i) {
-                        SwappedAliasRecord record{};
-                        a_serde->ReadRecordData(&record.questFormID, sizeof(record.questFormID));
-                        a_serde->ReadRecordData(&record.aliasID, sizeof(record.aliasID));
-                        a_serde->ReadRecordData(&record.originalActorFormID, sizeof(record.originalActorFormID));
-
-                        a_serde->ResolveFormID(record.questFormID, record.questFormID);
-                        a_serde->ResolveFormID(record.originalActorFormID, record.originalActorFormID);
-                        AliasManager::GetSingleton().AddRecord(record);
-                    }
-                    SKSE::log::info("Loaded {} swapped alias records from co-save.", count);
-                    break;
-                }
-
                 case kFaceDataRecord: {
                     FaceSnapshot face{};
                     if (ReadFaceSnapshotRecord(a_serde, face)) {
@@ -411,7 +315,6 @@ namespace AlternateActors::Serialization {
                         }
                     }
 
-                    // Optional donor quest items (v4+)
                     std::uint32_t questCount = 0;
                     if (a_serde->ReadRecordData(&questCount, sizeof(questCount))) {
                         for (std::uint32_t i = 0; i < questCount; ++i) {
@@ -423,7 +326,6 @@ namespace AlternateActors::Serialization {
                         }
                     }
 
-                    // Optional equipped spells & shout (v4+)
                     RE::FormID leftSpellID = 0, rightSpellID = 0, shoutID = 0;
                     RE::SpellItem* leftSpell = nullptr;
                     RE::SpellItem* rightSpell = nullptr;
@@ -450,34 +352,6 @@ namespace AlternateActors::Serialization {
                     break;
                 }
 
-                case kFactionDataRecord: {
-                    RE::FormID crimeID = 0;
-                    a_serde->ReadRecordData(&crimeID, sizeof(crimeID));
-                    RE::TESFaction* crimeFaction = nullptr;
-                    if (a_serde->ResolveFormID(crimeID, crimeID)) {
-                        crimeFaction = RE::TESForm::LookupByID<RE::TESFaction>(crimeID);
-                    }
-
-                    std::uint32_t count = 0;
-                    a_serde->ReadRecordData(&count, sizeof(count));
-                    std::vector<FactionRecord> factions;
-                    for (std::uint32_t i = 0; i < count; ++i) {
-                        RE::FormID factID = 0;
-                        std::int8_t rank = 0;
-                        a_serde->ReadRecordData(&factID, sizeof(factID));
-                        a_serde->ReadRecordData(&rank, sizeof(rank));
-                        if (a_serde->ResolveFormID(factID, factID)) {
-                            auto* fact = RE::TESForm::LookupByID<RE::TESFaction>(factID);
-                            if (fact) {
-                                factions.push_back({ fact, rank });
-                            }
-                        }
-                    }
-                    FactionManager::GetSingleton().SetSavedState(factions, crimeFaction);
-                    SKSE::log::info("Loaded {} saved player factions from co-save.", factions.size());
-                    break;
-                }
-
                 case kStatDataRecord: {
                     std::uint32_t count = 0;
                     a_serde->ReadRecordData(&count, sizeof(count));
@@ -497,33 +371,24 @@ namespace AlternateActors::Serialization {
                 case kIdleAIDataRecord: {
                     bool enabled = false;
                     float timeout = 10.0f;
-                    std::int32_t unusedHotkey{ 0 };
                     RE::FormID donorID = 0;
-                    bool combatAIEnabled = true;
 
                     a_serde->ReadRecordData(&enabled, sizeof(enabled));
                     a_serde->ReadRecordData(&timeout, sizeof(timeout));
-                    a_serde->ReadRecordData(&unusedHotkey, sizeof(unusedHotkey));
-                    if (length >= (sizeof(enabled) + sizeof(timeout) + sizeof(unusedHotkey) + sizeof(donorID))) {
-                        a_serde->ReadRecordData(&donorID, sizeof(donorID));
-                        if (a_serde->ResolveFormID(donorID, donorID)) {
-                            auto* donor = RE::TESForm::LookupByID<RE::Actor>(donorID);
-                            IdleAIManager::GetSingleton().SetActiveDonorActor(donor);
-                        }
-                    }
-                    if (length >= (sizeof(enabled) + sizeof(timeout) + sizeof(unusedHotkey) + sizeof(donorID) + sizeof(combatAIEnabled))) {
-                        a_serde->ReadRecordData(&combatAIEnabled, sizeof(combatAIEnabled));
+                    a_serde->ReadRecordData(&donorID, sizeof(donorID));
+                    if (donorID != 0 && a_serde->ResolveFormID(donorID, donorID)) {
+                        auto* donor = RE::TESForm::LookupByID<RE::Actor>(donorID);
+                        IdleAIManager::GetSingleton().SetActiveDonorActor(donor);
                     }
 
                     IdleAIManager::GetSingleton().SetIdleAIEnabled(enabled);
                     IdleAIManager::GetSingleton().SetIdleTimeout(timeout);
-                    IdleAIManager::GetSingleton().SetCombatAIEnabled(combatAIEnabled);
-                    SKSE::log::info("Loaded Idle AI state from co-save (combatAIEnabled={}).", combatAIEnabled);
+                    SKSE::log::info("Loaded Idle AI state from co-save.");
                     break;
                 }
 
                 case kImpersonationDataRecord: {
-                    ImpersonationManager::GetSingleton().Load(a_serde, version, length);
+                    ImpersonationManager::GetSingleton().Load(a_serde, length);
                     SKSE::log::info("Loaded Impersonation state from co-save.");
                     break;
                 }
@@ -547,7 +412,6 @@ namespace AlternateActors::Serialization {
         FaceManager::GetSingleton().ClearSavedAppearance();
         FaceManager::GetSingleton().ClearDonorAppearance();
         InventoryManager::GetSingleton().Clear();
-        FactionManager::GetSingleton().Clear();
         StatManager::GetSingleton().Clear();
         IdleAIManager::GetSingleton().Clear();
         ImpersonationManager::GetSingleton().OnRevert();
