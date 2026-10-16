@@ -536,6 +536,13 @@ namespace AlternateActors::Serialization {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
+        if (FaceManager::GetSingleton().HasSavedAppearance()) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player && player->GetActorBase()) {
+                FaceManager::GetSingleton().RevertAppearance(player, false);
+                SKSE::log::info("Reverted player appearance to original before save load.");
+            }
+        }
         AliasManager::GetSingleton().Clear();
         FaceManager::GetSingleton().ClearSavedAppearance();
         FaceManager::GetSingleton().ClearDonorAppearance();

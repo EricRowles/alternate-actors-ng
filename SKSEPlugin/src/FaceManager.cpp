@@ -159,7 +159,7 @@ namespace AlternateActors {
         return true;
     }
 
-    bool FaceManager::ApplySnapshot(RE::Actor* a_targetActor, const FaceSnapshot& a_snapshot) {
+    bool FaceManager::ApplySnapshot(RE::Actor* a_targetActor, const FaceSnapshot& a_snapshot, bool a_update3D) {
         if (!a_targetActor) return false;
 
         auto* base = a_targetActor->GetActorBase();
@@ -208,7 +208,9 @@ namespace AlternateActors {
 
         // 3. Body scales & tint
         targetNPC->height = a_snapshot.height;
-        a_targetActor->SetScale(a_snapshot.scale);
+        if (a_update3D) {
+            a_targetActor->SetScale(a_snapshot.scale);
+        }
         targetNPC->weight = a_snapshot.weight;
         targetNPC->bodyTintColor = a_snapshot.bodyTintColor;
 
@@ -315,7 +317,7 @@ namespace AlternateActors {
 
         // When transferring AI packages to the player, append DefaultSandboxCurrentLocation1024 (0x000BFB6B)
         // at the tail as a universal fallback so autonomous idle AI can wander anywhere in Skyrim
-        if (a_targetActor && a_targetActor->IsPlayerRef()) {
+        if (a_targetActor && a_targetActor->IsPlayerRef() && a_snapshot.faceNPC != nullptr) {
             auto* defaultSandbox = RE::TESForm::LookupByID<RE::TESPackage>(0x000BFB6B);
             if (defaultSandbox) {
                 targetNPC->aiPackages.packages.push_front(defaultSandbox);
@@ -345,32 +347,7 @@ namespace AlternateActors {
             }
         }
 
-        // 8. Synchronous 3D mesh and skin update
-        a_targetActor->UpdateHairColor();
-        a_targetActor->UpdateSkinColor();
-        a_targetActor->DoReset3D(true);
-        a_targetActor->Update3DModel();
-        a_targetActor->UpdateHairColor();
-        a_targetActor->UpdateSkinColor();
-
-        // Apply hair tint directly to hair geometry
-        if (a_snapshot.hasHairTintColor) {
-            auto* targetHair = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kHair);
-            if (targetHair) {
-                RE::BSVisit::TraverseScenegraphGeometries(targetHair, [&](RE::BSGeometry* geom) {
-                    if (geom) {
-                        if (auto* shaderProp = geom->lightingShaderProp_cast()) {
-                            if (auto* hairMat = skyrim_cast<RE::BSLightingShaderMaterialHairTint*>(shaderProp->material)) {
-                                hairMat->tintColor = a_snapshot.hairTintColor;
-                            }
-                        }
-                    }
-                    return RE::BSVisit::BSVisitControl::kContinue;
-                });
-            }
-        }
-
-        // Apply face skin tint directly to face head geometry if applicable
+        // Resolve skin tint color for body tint
         RE::NiColor skinTint;
         bool hasSkinTint = false;
         if (a_snapshot.hasSkinTintColor) {
@@ -410,28 +387,55 @@ namespace AlternateActors {
             targetNPC->bodyTintColor.blue = static_cast<std::uint8_t>(std::clamp(skinTint.blue * 255.0f, 0.0f, 255.0f));
         }
 
-        // Apply skin tint and soft matte lighting strictly to face headpart FacegenTint material
-        auto* targetFace = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
-        if (targetFace) {
-            RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
-                if (geom) {
-                    if (auto* shaderProp = geom->lightingShaderProp_cast()) {
-                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
-                            if (hasSkinTint) {
-                                faceMat->tintColor = skinTint;
+        if (a_update3D) {
+            // 8. Synchronous 3D mesh and skin update
+            a_targetActor->UpdateHairColor();
+            a_targetActor->UpdateSkinColor();
+            a_targetActor->DoReset3D(true);
+            a_targetActor->Update3DModel();
+            a_targetActor->UpdateHairColor();
+            a_targetActor->UpdateSkinColor();
+
+            // Apply hair tint directly to hair geometry
+            if (a_snapshot.hasHairTintColor) {
+                auto* targetHair = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kHair);
+                if (targetHair) {
+                    RE::BSVisit::TraverseScenegraphGeometries(targetHair, [&](RE::BSGeometry* geom) {
+                        if (geom) {
+                            if (auto* shaderProp = geom->lightingShaderProp_cast()) {
+                                if (auto* hairMat = skyrim_cast<RE::BSLightingShaderMaterialHairTint*>(shaderProp->material)) {
+                                    hairMat->tintColor = a_snapshot.hairTintColor;
+                                }
                             }
-                            faceMat->specularColorScale = 0.20f;
-                            faceMat->specularPower = 10.0f;
-                            faceMat->subSurfaceLightRolloff = 0.6f;
+                        }
+                        return RE::BSVisit::BSVisitControl::kContinue;
+                    });
+                }
+            }
+
+            // Apply skin tint and soft matte lighting strictly to face headpart FacegenTint material
+            auto* targetFace = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
+            if (targetFace) {
+                RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
+                    if (geom) {
+                        if (auto* shaderProp = geom->lightingShaderProp_cast()) {
+                            if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                                if (hasSkinTint) {
+                                    faceMat->tintColor = skinTint;
+                                }
+                                faceMat->specularColorScale = 0.20f;
+                                faceMat->specularPower = 10.0f;
+                                faceMat->subSurfaceLightRolloff = 0.6f;
+                            }
                         }
                     }
-                }
-                return RE::BSVisit::BSVisitControl::kContinue;
-            });
-        }
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
+            }
 
-        if (isPuppet) {
-            _puppetNeedsPost3DUpdate.store(true, std::memory_order_relaxed);
+            if (isPuppet) {
+                _puppetNeedsPost3DUpdate.store(true, std::memory_order_relaxed);
+            }
         }
 
         SKSE::log::info("Applied appearance and AI snapshot (Race: {:08X}, Sex: {}, Voice: {:08X}, Tints: {}, Parts: {}) to actor {:08X}",
@@ -488,7 +492,7 @@ namespace AlternateActors {
         return CopyAppearance(a_donor, a_target);
     }
 
-    bool FaceManager::RevertAppearance(RE::Actor* a_target) {
+    bool FaceManager::RevertAppearance(RE::Actor* a_target, bool a_update3D) {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
         IdleAIManager::GetSingleton().SetActiveDonorActor(nullptr);
         if (!a_target) return false;
@@ -498,12 +502,13 @@ namespace AlternateActors {
             return false;
         }
 
-        bool result = ApplySnapshot(a_target, _savedOriginalAppearance);
+        bool result = ApplySnapshot(a_target, _savedOriginalAppearance, a_update3D);
         if (result) {
             _hasSavedAppearance = false;
             _hasDonorAppearance = false;
-            SKSE::log::info("Successfully reverted appearance of actor {:08X} to original.",
-                static_cast<std::uint32_t>(a_target->GetFormID()));
+            SKSE::log::info("Successfully reverted appearance of actor {:08X} to original (update3D={}).",
+                static_cast<std::uint32_t>(a_target->GetFormID()),
+                a_update3D);
         }
         return result;
     }

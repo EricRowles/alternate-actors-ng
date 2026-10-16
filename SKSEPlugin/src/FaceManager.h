@@ -60,7 +60,7 @@ namespace AlternateActors {
         bool CopyAppearance(RE::Actor* a_donor, RE::Actor* a_target);
 
         // Restores saved original appearance onto target actor
-        bool RevertAppearance(RE::Actor* a_target);
+        bool RevertAppearance(RE::Actor* a_target, bool a_update3D = true);
 
         // Restores active donor appearance onto target actor (using saved donor snapshot if available, or donor actor fallback)
         bool RestoreDonorAppearance(RE::Actor* a_donor, RE::Actor* a_target);
@@ -70,7 +70,7 @@ namespace AlternateActors {
 
         // Snapshot utilities
         bool CaptureSnapshot(RE::Actor* a_actor, FaceSnapshot& a_outSnapshot);
-        bool ApplySnapshot(RE::Actor* a_targetActor, const FaceSnapshot& a_snapshot);
+        bool ApplySnapshot(RE::Actor* a_targetActor, const FaceSnapshot& a_snapshot, bool a_update3D = true);
 
         // State & Serialization
         bool HasSavedAppearance() const {
@@ -88,6 +88,7 @@ namespace AlternateActors {
         }
         void ClearSavedAppearance() {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _savedOriginalAppearance = FaceSnapshot{};
             _hasSavedAppearance = false;
         }
 
@@ -106,6 +107,7 @@ namespace AlternateActors {
         }
         void ClearDonorAppearance() {
             std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _donorAppearance = FaceSnapshot{};
             _hasDonorAppearance = false;
         }
 
