@@ -215,10 +215,7 @@ namespace AlternateActors {
 
         // 4. Hair & Face details
         if (!targetNPC->headRelatedData) {
-            auto* mm = RE::MemoryManager::GetSingleton();
-            targetNPC->headRelatedData = static_cast<RE::TESNPC::HeadRelatedData*>(
-                mm ? mm->Allocate(sizeof(RE::TESNPC::HeadRelatedData), 0, false) : new RE::TESNPC::HeadRelatedData()
-            );
+            targetNPC->headRelatedData = RE::calloc<RE::TESNPC::HeadRelatedData>(1);
             if (targetNPC->headRelatedData) {
                 targetNPC->headRelatedData->hairColor = nullptr;
                 targetNPC->headRelatedData->faceDetails = nullptr;
@@ -231,10 +228,7 @@ namespace AlternateActors {
 
         // 5. Face morphs & parts
         if (!targetNPC->faceData) {
-            auto* mm = RE::MemoryManager::GetSingleton();
-            targetNPC->faceData = static_cast<RE::TESNPC::FaceData*>(
-                mm ? mm->Allocate(sizeof(RE::TESNPC::FaceData), 0, false) : new RE::TESNPC::FaceData()
-            );
+            targetNPC->faceData = RE::calloc<RE::TESNPC::FaceData>(1);
             if (targetNPC->faceData) {
                 std::memset(targetNPC->faceData, 0, sizeof(RE::TESNPC::FaceData));
             }
@@ -248,12 +242,16 @@ namespace AlternateActors {
             }
         }
 
-        // 6. Complete Headparts Replacement
+        // 6. Complete Headparts Replacement (free previous buffer first to avoid leaking on FormHeap)
+        if (targetNPC->headParts) {
+            RE::free(targetNPC->headParts);
+            targetNPC->headParts = nullptr;
+            targetNPC->numHeadParts = 0;
+        }
         if (!a_snapshot.headParts.empty()) {
             auto count = static_cast<std::int8_t>(a_snapshot.headParts.size());
-            auto* mm = RE::MemoryManager::GetSingleton();
-            if (mm && count > 0) {
-                auto* newParts = static_cast<RE::BGSHeadPart**>(mm->Allocate(sizeof(RE::BGSHeadPart*) * count, 0, false));
+            if (count > 0) {
+                auto* newParts = RE::calloc<RE::BGSHeadPart*>(static_cast<std::size_t>(count));
                 if (newParts) {
                     for (std::int8_t i = 0; i < count; ++i) {
                         newParts[i] = a_snapshot.headParts[i];
@@ -267,35 +265,34 @@ namespace AlternateActors {
         // 6b. Tint Layers Replication
         if (!a_snapshot.tintLayers.empty()) {
             if (!targetNPC->tintLayers) {
-                auto* mm = RE::MemoryManager::GetSingleton();
-                targetNPC->tintLayers = static_cast<RE::BSTArray<RE::TESNPC::Layer*>*>(
-                    mm ? mm->Allocate(sizeof(RE::BSTArray<RE::TESNPC::Layer*>), 0, false) : new RE::BSTArray<RE::TESNPC::Layer*>()
-                );
-                if (targetNPC->tintLayers) {
-                    new (targetNPC->tintLayers) RE::BSTArray<RE::TESNPC::Layer*>();
+                auto* raw = RE::calloc<RE::BSTArray<RE::TESNPC::Layer*>>(1);
+                if (raw) {
+                    targetNPC->tintLayers = new (raw) RE::BSTArray<RE::TESNPC::Layer*>();
                 }
             }
             if (targetNPC->tintLayers) {
                 for (auto* oldLayer : *targetNPC->tintLayers) {
                     if (oldLayer) {
-                        auto* mm = RE::MemoryManager::GetSingleton();
-                        if (mm) mm->Deallocate(oldLayer, false);
-                        else delete oldLayer;
+                        RE::free(oldLayer);
                     }
                 }
                 targetNPC->tintLayers->clear();
 
-                auto* mm = RE::MemoryManager::GetSingleton();
                 for (const auto& layer : a_snapshot.tintLayers) {
-                    auto* newLayer = static_cast<RE::TESNPC::Layer*>(
-                        mm ? mm->Allocate(sizeof(RE::TESNPC::Layer), 0, false) : new RE::TESNPC::Layer()
-                    );
+                    auto* newLayer = RE::calloc<RE::TESNPC::Layer>(1);
                     if (newLayer) {
                         *newLayer = layer;
                         targetNPC->tintLayers->push_back(newLayer);
                     }
                 }
             }
+        } else if (targetNPC->tintLayers) {
+            for (auto* oldLayer : *targetNPC->tintLayers) {
+                if (oldLayer) {
+                    RE::free(oldLayer);
+                }
+            }
+            targetNPC->tintLayers->clear();
         }
 
         // 7. AI Behavior & Combat Profile Transfer
@@ -412,36 +409,21 @@ namespace AlternateActors {
             targetNPC->bodyTintColor.red = static_cast<std::uint8_t>(std::clamp(skinTint.red * 255.0f, 0.0f, 255.0f));
             targetNPC->bodyTintColor.green = static_cast<std::uint8_t>(std::clamp(skinTint.green * 255.0f, 0.0f, 255.0f));
             targetNPC->bodyTintColor.blue = static_cast<std::uint8_t>(std::clamp(skinTint.blue * 255.0f, 0.0f, 255.0f));
-
-            auto* targetFace = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
-            if (targetFace) {
-                RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
-                    if (geom) {
-                        if (auto* shaderProp = geom->lightingShaderProp_cast()) {
-                            if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
-                                faceMat->tintColor = skinTint;
-                            }
-                        }
-                    }
-                    return RE::BSVisit::BSVisitControl::kContinue;
-                });
-            }
         }
 
-        if (isPuppet) {
-            _puppetNeedsPost3DUpdate = true;
-        }
-
-        // Soft matte lighting to prevent metallic face reflections
-        auto* target3D = a_targetActor->Get3D();
-        if (target3D) {
-            RE::BSVisit::TraverseScenegraphGeometries(target3D, [](RE::BSGeometry* geom) {
+        // Apply skin tint and soft matte lighting strictly to face headpart FacegenTint material
+        auto* targetFace = a_targetActor->GetHeadPartObject(RE::BGSHeadPart::HeadPartType::kFace);
+        if (targetFace) {
+            RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
                 if (geom) {
                     if (auto* shaderProp = geom->lightingShaderProp_cast()) {
-                        if (auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(shaderProp->material)) {
-                            mat->specularColorScale = 0.20f;
-                            mat->specularPower = 10.0f;
-                            mat->subSurfaceLightRolloff = 0.6f;
+                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                            if (hasSkinTint) {
+                                faceMat->tintColor = skinTint;
+                            }
+                            faceMat->specularColorScale = 0.20f;
+                            faceMat->specularPower = 10.0f;
+                            faceMat->subSurfaceLightRolloff = 0.6f;
                         }
                     }
                 }
@@ -449,6 +431,9 @@ namespace AlternateActors {
             });
         }
 
+        if (isPuppet) {
+            _puppetNeedsPost3DUpdate.store(true, std::memory_order_relaxed);
+        }
 
         SKSE::log::info("Applied appearance and AI snapshot (Race: {:08X}, Sex: {}, Voice: {:08X}, Tints: {}, Parts: {}) to actor {:08X}",
             a_snapshot.race ? static_cast<std::uint32_t>(a_snapshot.race->GetFormID()) : 0,
@@ -463,6 +448,7 @@ namespace AlternateActors {
     }
 
     bool FaceManager::CopyAppearance(RE::Actor* a_donor, RE::Actor* a_target) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_donor || !a_target) {
             SKSE::log::warn("CopyAppearance called with null actor pointers.");
             return false;
@@ -479,6 +465,7 @@ namespace AlternateActors {
     }
 
     bool FaceManager::CloneAppearance(RE::Actor* a_donor, RE::Actor* a_target) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         IdleAIManager::GetSingleton().SetActiveDonorActor(a_donor);
         if (!a_donor || !a_target) {
             SKSE::log::warn("CloneAppearance called with null actor pointers.");
@@ -503,6 +490,7 @@ namespace AlternateActors {
     }
 
     bool FaceManager::RevertAppearance(RE::Actor* a_target) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         IdleAIManager::GetSingleton().SetActiveDonorActor(nullptr);
         if (!a_target) return false;
 
@@ -522,6 +510,7 @@ namespace AlternateActors {
     }
 
     bool FaceManager::RestoreDonorAppearance(RE::Actor* a_donor, RE::Actor* a_target) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_target) return false;
 
         if (_hasDonorAppearance) {
@@ -545,6 +534,7 @@ namespace AlternateActors {
     }
 
     bool FaceManager::RestoreOriginalPuppetAppearance(RE::Actor* a_puppet) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_puppet) return false;
 
         if (auto* base = skyrim_cast<RE::TESNPC*>(a_puppet->GetActorBase())) {
@@ -562,6 +552,7 @@ namespace AlternateActors {
     }
 
     void FaceManager::ApplyPuppetPost3DLighting(RE::Actor* a_puppet) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_puppet) return;
 
         auto* puppet3D = a_puppet->Get3D();
@@ -598,34 +589,24 @@ namespace AlternateActors {
             hasSkinTint = true;
         }
 
-        if (hasSkinTint) {
-            RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
-                if (geom) {
-                    if (auto* shaderProp = geom->lightingShaderProp_cast()) {
-                        if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
-                            faceMat->tintColor = skinTint;
-                        }
-                    }
-                }
-                return RE::BSVisit::BSVisitControl::kContinue;
-            });
-        }
-
-        RE::BSVisit::TraverseScenegraphGeometries(puppet3D, [](RE::BSGeometry* geom) {
+        RE::BSVisit::TraverseScenegraphGeometries(targetFace, [&](RE::BSGeometry* geom) {
             if (geom) {
                 if (auto* shaderProp = geom->lightingShaderProp_cast()) {
-                    if (auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(shaderProp->material)) {
-                        mat->specularColorScale = 0.20f;
-                        mat->specularPower = 10.0f;
-                        mat->subSurfaceLightRolloff = 0.6f;
+                    if (auto* faceMat = skyrim_cast<RE::BSLightingShaderMaterialFacegenTint*>(shaderProp->material)) {
+                        if (hasSkinTint) {
+                            faceMat->tintColor = skinTint;
+                        }
+                        faceMat->specularColorScale = 0.20f;
+                        faceMat->specularPower = 10.0f;
+                        faceMat->subSurfaceLightRolloff = 0.6f;
                     }
                 }
             }
             return RE::BSVisit::BSVisitControl::kContinue;
         });
 
-        _puppetNeedsPost3DUpdate = false;
-        SKSE::log::info("Applied post-3D skin, hair, and soft matte lighting to puppet {:08X}",
+        _puppetNeedsPost3DUpdate.store(false, std::memory_order_relaxed);
+        SKSE::log::info("Applied post-3D skin, hair, and soft matte face lighting to puppet {:08X}",
             static_cast<std::uint32_t>(a_puppet->GetFormID()));
     }
 

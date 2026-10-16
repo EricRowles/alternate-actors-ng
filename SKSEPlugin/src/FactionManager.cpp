@@ -86,6 +86,7 @@ namespace AlternateActors {
     }
 
     bool FactionManager::TransferFactionsToPlayer(RE::Actor* a_player, RE::Actor* a_donor) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_player || !a_donor) {
             SKSE::log::warn("TransferFactionsToPlayer called with null actor pointers.");
             return false;
@@ -108,6 +109,7 @@ namespace AlternateActors {
     }
 
     bool FactionManager::RestoreFactionsFromPlayer(RE::Actor* a_player) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_player) return false;
 
         if (!_hasSavedFactions) {

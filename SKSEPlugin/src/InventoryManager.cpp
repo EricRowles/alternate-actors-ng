@@ -35,6 +35,7 @@ namespace AlternateActors {
     }
 
     bool InventoryManager::StashPlayerDynamicSpells(RE::Actor* a_player) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_player) return false;
 
         _playerSavedSpells.clear();
@@ -63,6 +64,7 @@ namespace AlternateActors {
     }
 
     bool InventoryManager::RestorePlayerDynamicSpells(RE::Actor* a_player) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_player) return false;
 
         std::int32_t restoredCount = 0;
@@ -81,6 +83,7 @@ namespace AlternateActors {
     }
 
     bool InventoryManager::CopyDynamicSpells(RE::Actor* a_fromActor, RE::Actor* a_toActor) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_fromActor || !a_toActor) return false;
 
         std::int32_t copiedCount = 0;
@@ -121,6 +124,7 @@ namespace AlternateActors {
     }
 
     bool InventoryManager::RemoveCopiedSpells(RE::Actor* a_targetActor) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_targetActor) return false;
 
         std::int32_t removedCount = 0;

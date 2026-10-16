@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <vector>
 #include <unordered_map>
 
@@ -28,16 +29,27 @@ namespace AlternateActors {
         void SetActorFactions(RE::Actor* a_actor, const std::vector<FactionRecord>& a_factions, RE::TESFaction* a_crimeFaction);
 
         void Clear() {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             _savedPlayerFactions.clear();
             _savedPlayerCrimeFaction = nullptr;
             _hasSavedFactions = false;
         }
 
-        bool HasSavedFactions() const { return _hasSavedFactions; }
-        const std::vector<FactionRecord>& GetSavedPlayerFactions() const { return _savedPlayerFactions; }
-        RE::TESFaction* GetSavedCrimeFaction() const { return _savedPlayerCrimeFaction; }
+        bool HasSavedFactions() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _hasSavedFactions;
+        }
+        std::vector<FactionRecord> GetSavedPlayerFactions() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _savedPlayerFactions;
+        }
+        RE::TESFaction* GetSavedCrimeFaction() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _savedPlayerCrimeFaction;
+        }
 
         void SetSavedState(const std::vector<FactionRecord>& a_factions, RE::TESFaction* a_crimeFaction) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             _savedPlayerFactions = a_factions;
             _savedPlayerCrimeFaction = a_crimeFaction;
             _hasSavedFactions = true;
@@ -49,6 +61,7 @@ namespace AlternateActors {
         FactionManager(const FactionManager&) = delete;
         FactionManager& operator=(const FactionManager&) = delete;
 
+        mutable std::recursive_mutex _mutex;
         std::vector<FactionRecord> _savedPlayerFactions;
         RE::TESFaction* _savedPlayerCrimeFaction{ nullptr };
         bool _hasSavedFactions{ false };

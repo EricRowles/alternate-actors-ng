@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <vector>
 #include <unordered_map>
 
@@ -30,13 +31,21 @@ namespace AlternateActors {
         bool ApplySnapshot(RE::Actor* a_targetActor, const StatSnapshot& a_snapshot);
 
         void Clear() {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             _savedPlayerStats.baseValues.clear();
             _hasSavedStats = false;
         }
 
-        bool HasSavedStats() const { return _hasSavedStats; }
-        const StatSnapshot& GetSavedPlayerStats() const { return _savedPlayerStats; }
+        bool HasSavedStats() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _hasSavedStats;
+        }
+        StatSnapshot GetSavedPlayerStats() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _savedPlayerStats;
+        }
         void SetSavedPlayerStats(const StatSnapshot& a_snapshot) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             _savedPlayerStats = a_snapshot;
             _hasSavedStats = true;
         }
@@ -47,6 +56,7 @@ namespace AlternateActors {
         StatManager(const StatManager&) = delete;
         StatManager& operator=(const StatManager&) = delete;
 
+        mutable std::recursive_mutex _mutex;
         StatSnapshot _savedPlayerStats;
         bool _hasSavedStats{ false };
     };

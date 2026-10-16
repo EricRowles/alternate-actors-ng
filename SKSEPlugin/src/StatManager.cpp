@@ -89,6 +89,7 @@ namespace AlternateActors {
     }
 
     bool StatManager::TransferStatsToPlayer(RE::Actor* a_player, RE::Actor* a_donor) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_player || !a_donor) {
             SKSE::log::warn("TransferStatsToPlayer called with null actor pointers.");
             return false;
@@ -107,6 +108,7 @@ namespace AlternateActors {
     }
 
     bool StatManager::RestoreStatsFromPlayer(RE::Actor* a_player) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_player) return false;
 
         if (!_hasSavedStats) {

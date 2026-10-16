@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <vector>
 #include <cstdint>
 
@@ -26,10 +27,17 @@ namespace AlternateActors {
 
         // Savegame state helpers
         void Clear();
-        const std::vector<SwappedAliasRecord>& GetRecords() const { return _swappedRecords; }
-        void AddRecord(const SwappedAliasRecord& record) { _swappedRecords.push_back(record); }
+        std::vector<SwappedAliasRecord> GetRecords() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _swappedRecords;
+        }
+        void AddRecord(const SwappedAliasRecord& record) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _swappedRecords.push_back(record);
+        }
         bool HasRecord(RE::FormID a_questFormID, std::uint32_t a_aliasID) const;
         bool HasQuest(RE::FormID a_questFormID) const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             for (const auto& rec : _swappedRecords) {
                 if (rec.questFormID == a_questFormID) return true;
             }
@@ -49,6 +57,7 @@ namespace AlternateActors {
         AliasManager(const AliasManager&) = delete;
         AliasManager& operator=(const AliasManager&) = delete;
 
+        mutable std::recursive_mutex _mutex;
         std::vector<SwappedAliasRecord> _swappedRecords;
     };
 

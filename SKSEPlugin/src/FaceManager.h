@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <vector>
 #include "RE/N/NiColor.h"
 
@@ -71,18 +73,44 @@ namespace AlternateActors {
         bool ApplySnapshot(RE::Actor* a_targetActor, const FaceSnapshot& a_snapshot);
 
         // State & Serialization
-        bool HasSavedAppearance() const { return _hasSavedAppearance; }
-        const FaceSnapshot& GetSavedAppearance() const { return _savedOriginalAppearance; }
-        void SetSavedAppearance(const FaceSnapshot& a_snapshot) { _savedOriginalAppearance = a_snapshot; _hasSavedAppearance = true; }
-        void ClearSavedAppearance() { _hasSavedAppearance = false; }
+        bool HasSavedAppearance() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _hasSavedAppearance;
+        }
+        FaceSnapshot GetSavedAppearance() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _savedOriginalAppearance;
+        }
+        void SetSavedAppearance(const FaceSnapshot& a_snapshot) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _savedOriginalAppearance = a_snapshot;
+            _hasSavedAppearance = true;
+        }
+        void ClearSavedAppearance() {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _hasSavedAppearance = false;
+        }
 
-        bool HasDonorAppearance() const { return _hasDonorAppearance; }
-        const FaceSnapshot& GetDonorAppearance() const { return _donorAppearance; }
-        void SetDonorAppearance(const FaceSnapshot& a_snapshot) { _donorAppearance = a_snapshot; _hasDonorAppearance = true; }
-        void ClearDonorAppearance() { _hasDonorAppearance = false; }
+        bool HasDonorAppearance() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _hasDonorAppearance;
+        }
+        FaceSnapshot GetDonorAppearance() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _donorAppearance;
+        }
+        void SetDonorAppearance(const FaceSnapshot& a_snapshot) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _donorAppearance = a_snapshot;
+            _hasDonorAppearance = true;
+        }
+        void ClearDonorAppearance() {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _hasDonorAppearance = false;
+        }
 
-        bool NeedsPuppetPost3DUpdate() const { return _puppetNeedsPost3DUpdate; }
-        void SetPuppetNeedsPost3DUpdate(bool a_needs) { _puppetNeedsPost3DUpdate = a_needs; }
+        bool NeedsPuppetPost3DUpdate() const { return _puppetNeedsPost3DUpdate.load(std::memory_order_relaxed); }
+        void SetPuppetNeedsPost3DUpdate(bool a_needs) { _puppetNeedsPost3DUpdate.store(a_needs, std::memory_order_relaxed); }
         void ApplyPuppetPost3DLighting(RE::Actor* a_puppet);
 
     private:
@@ -91,11 +119,12 @@ namespace AlternateActors {
         FaceManager(const FaceManager&) = delete;
         FaceManager& operator=(const FaceManager&) = delete;
 
+        mutable std::recursive_mutex _mutex;
         FaceSnapshot _savedOriginalAppearance;
         bool _hasSavedAppearance{ false };
         FaceSnapshot _donorAppearance;
         bool _hasDonorAppearance{ false };
-        bool _puppetNeedsPost3DUpdate{ false };
+        std::atomic<bool> _puppetNeedsPost3DUpdate{ false };
     };
 
 }

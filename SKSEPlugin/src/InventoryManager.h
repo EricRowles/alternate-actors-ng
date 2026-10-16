@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <vector>
 
 namespace AlternateActors {
@@ -22,16 +23,32 @@ namespace AlternateActors {
         bool RemoveCopiedSpells(RE::Actor* a_targetActor);
 
         void Clear() {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             _transferredSpells.clear();
             _playerSavedSpells.clear();
         }
 
-        const std::vector<RE::FormID>& GetTransferredSpellIDs() const { return _transferredSpells; }
-        void AddTransferredSpellID(RE::FormID a_id) { _transferredSpells.push_back(a_id); }
+        std::vector<RE::FormID> GetTransferredSpellIDs() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _transferredSpells;
+        }
+        void AddTransferredSpellID(RE::FormID a_id) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _transferredSpells.push_back(a_id);
+        }
 
-        const std::vector<RE::FormID>& GetSavedPlayerSpellIDs() const { return _playerSavedSpells; }
-        void AddSavedPlayerSpellID(RE::FormID a_id) { _playerSavedSpells.push_back(a_id); }
-        void SetSavedPlayerSpellIDs(const std::vector<RE::FormID>& a_ids) { _playerSavedSpells = a_ids; }
+        std::vector<RE::FormID> GetSavedPlayerSpellIDs() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _playerSavedSpells;
+        }
+        void AddSavedPlayerSpellID(RE::FormID a_id) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _playerSavedSpells.push_back(a_id);
+        }
+        void SetSavedPlayerSpellIDs(const std::vector<RE::FormID>& a_ids) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _playerSavedSpells = a_ids;
+        }
 
     private:
         InventoryManager() = default;
@@ -39,6 +56,7 @@ namespace AlternateActors {
         InventoryManager(const InventoryManager&) = delete;
         InventoryManager& operator=(const InventoryManager&) = delete;
 
+        mutable std::recursive_mutex _mutex;
         std::vector<RE::FormID> _transferredSpells;
         std::vector<RE::FormID> _playerSavedSpells;
     };

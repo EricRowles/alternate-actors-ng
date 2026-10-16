@@ -85,30 +85,33 @@ namespace AlternateActors {
     }
 
     void IdleAIManager::Update() {
-        CheckIdleAI();
-        if (_aiActive && _isControllingNPC) {
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (player) {
-                if (player->IsInCombat()) {
-                    if (!_combatAIEnabled) {
-                        StopIdleAI();
-                    } else {
-                        if (!_isCombatAIActive) {
-                            _isCombatAIActive = true;
-                            player->SetAIDriven(false);
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            CheckIdleAI();
+            if (_aiActive.load(std::memory_order_acquire) && _isControllingNPC.load(std::memory_order_acquire)) {
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                if (player) {
+                    if (player->IsInCombat()) {
+                        if (!_combatAIEnabled.load(std::memory_order_acquire)) {
+                            StopIdleAI();
+                        } else {
+                            if (!_isCombatAIActive.load(std::memory_order_acquire)) {
+                                _isCombatAIActive.store(true, std::memory_order_release);
+                                player->SetAIDriven(false);
+                            }
+                            UpdateCombatAI();
                         }
-                        UpdateCombatAI();
-                    }
-                } else {
-                    if (_isCombatAIActive) {
-                        _isCombatAIActive = false;
-                        player->SetAIDriven(true);
-                        player->EvaluatePackage(true, true);
+                    } else {
+                        if (_isCombatAIActive.load(std::memory_order_acquire)) {
+                            _isCombatAIActive.store(false, std::memory_order_release);
+                            player->SetAIDriven(true);
+                            player->EvaluatePackage(true, true);
+                        }
                     }
                 }
             }
+            CheckAndTriggerIdleDialogue();
         }
-        CheckAndTriggerIdleDialogue();
         ImpersonationManager::GetSingleton().Tick();
     }
 
@@ -152,7 +155,7 @@ namespace AlternateActors {
 
         if (a_event->menuName == "Dialogue Menu"sv) {
             if (!a_event->opening) {
-                _inSelfDialogue = false;
+                _inSelfDialogue.store(false, std::memory_order_release);
                 auto* topicMgr = RE::MenuTopicManager::GetSingleton();
                 auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
                 if (topicMgr && puppet) {
@@ -171,15 +174,17 @@ namespace AlternateActors {
     }
 
     void IdleAIManager::OnUserInput() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         _lastInputTime = std::chrono::steady_clock::now();
-        if (_aiActive) {
+        if (_aiActive.load(std::memory_order_acquire)) {
             StopIdleAI();
         }
     }
 
     void IdleAIManager::CheckIdleAI() {
-        if (!_enabled || !_isControllingNPC) {
-            if (_aiActive) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_enabled.load(std::memory_order_acquire) || !_isControllingNPC.load(std::memory_order_acquire)) {
+            if (_aiActive.load(std::memory_order_acquire)) {
                 StopIdleAI();
             }
             return;
@@ -193,7 +198,7 @@ namespace AlternateActors {
             ui->IsMenuOpen("MapMenu"sv) || ui->IsMenuOpen("StatsMenu"sv) || ui->IsMenuOpen("InventoryMenu"sv) ||
             ui->IsMenuOpen("MagicMenu"sv) || ui->IsMenuOpen("TweenMenu"sv)) {
             _lastInputTime = std::chrono::steady_clock::now();
-            if (_aiActive) {
+            if (_aiActive.load(std::memory_order_acquire)) {
                 StopIdleAI();
             }
             return;
@@ -201,31 +206,32 @@ namespace AlternateActors {
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (player && player->IsInCombat()) {
-            if (!_combatAIEnabled) {
-                if (_aiActive) {
+            if (!_combatAIEnabled.load(std::memory_order_acquire)) {
+                if (_aiActive.load(std::memory_order_acquire)) {
                     StopIdleAI();
                 }
                 return;
             }
         }
 
-        float timeout = (player && player->IsInCombat()) ? 0.75f : _idleTimeoutSeconds;
+        float timeout = (player && player->IsInCombat()) ? 0.75f : _idleTimeoutSeconds.load(std::memory_order_acquire);
 
         auto now = std::chrono::steady_clock::now();
         float elapsed = std::chrono::duration<float>(now - _lastInputTime).count();
 
-        if (elapsed >= timeout && !_aiActive) {
+        if (elapsed >= timeout && !_aiActive.load(std::memory_order_acquire)) {
             StartIdleAI();
         }
     }
 
     void IdleAIManager::StartIdleAI() {
-        if (!_isControllingNPC || !_enabled) return;
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_isControllingNPC.load(std::memory_order_acquire) || !_enabled.load(std::memory_order_acquire)) return;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return;
 
-        if (player->IsInCombat() && !_combatAIEnabled) {
+        if (player->IsInCombat() && !_combatAIEnabled.load(std::memory_order_acquire)) {
             return;
         }
 
@@ -234,10 +240,10 @@ namespace AlternateActors {
             _savedUserRunning = pc->data.running;
         }
 
-        _aiActive = true;
+        _aiActive.store(true, std::memory_order_release);
 
         if (player->IsInCombat()) {
-            _isCombatAIActive = true;
+            _isCombatAIActive.store(true, std::memory_order_release);
             _lastCombatActionTime = std::chrono::steady_clock::now();
             auto* actorState = player->AsActorState();
             if (actorState && actorState->GetWeaponState() == RE::WEAPON_STATE::kSheathed) {
@@ -246,7 +252,7 @@ namespace AlternateActors {
             player->SetAIDriven(false);
             SKSE::log::info("Player idle timeout reached in combat - engaged autonomous combat AI");
         } else {
-            _isCombatAIActive = false;
+            _isCombatAIActive.store(false, std::memory_order_release);
             player->AllowBleedoutDialogue(true);
             player->SetAIDriven(true);
             player->EvaluatePackage(true, true);
@@ -262,6 +268,7 @@ namespace AlternateActors {
     }
 
     void IdleAIManager::StopIdleAI() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* pc = RE::PlayerControls::GetSingleton();
         if (player) {
@@ -269,13 +276,13 @@ namespace AlternateActors {
             if (player->IsBlocking()) {
                 player->NotifyAnimationGraph("blockStop");
             }
-            if (_bowDrawn) {
+            if (_bowDrawn.load(std::memory_order_acquire)) {
                 player->NotifyAnimationGraph("attackStop");
                 player->NotifyAnimationGraph("arrowRelease");
             }
             player->EvaluatePackage(false, false);
 
-            if (_aiActive) {
+            if (_aiActive.load(std::memory_order_acquire)) {
                 SKSE::log::info("Player input detected - disengaged autonomous AI.");
             }
         }
@@ -286,25 +293,27 @@ namespace AlternateActors {
         }
         _currentTarget.reset();
         _isBlocking = false;
-        _bowDrawn = false;
-        _isCombatAIActive = false;
-        _aiActive = false;
+        _bowDrawn.store(false, std::memory_order_release);
+        _isCombatAIActive.store(false, std::memory_order_release);
+        _aiActive.store(false, std::memory_order_release);
         _lastInputTime = std::chrono::steady_clock::now();
     }
 
     void IdleAIManager::SetCombatAIEnabled(bool a_enabled) {
-        _combatAIEnabled = a_enabled;
-        if (!_combatAIEnabled && _isCombatAIActive) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _combatAIEnabled.store(a_enabled, std::memory_order_release);
+        if (!a_enabled && _isCombatAIActive.load(std::memory_order_acquire)) {
             StopIdleAI();
         }
         SKSE::log::info("IdleAIManager combat AI enabled set to: {}", a_enabled);
     }
 
     void IdleAIManager::SetControllingNPC(bool a_controlling) {
-        _isControllingNPC = a_controlling;
-        if (!_isControllingNPC) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _isControllingNPC.store(a_controlling, std::memory_order_release);
+        if (!a_controlling) {
             StopIdleAI();
-            _inSelfDialogue = false;
+            _inSelfDialogue.store(false, std::memory_order_release);
         } else {
             auto* pc = RE::PlayerControls::GetSingleton();
             if (pc) {
@@ -377,7 +386,7 @@ namespace AlternateActors {
             }
         }
 
-        if (_aiActive) {
+        if (_aiActive.load(std::memory_order_acquire)) {
             StopIdleAI();
         }
 
@@ -395,7 +404,7 @@ namespace AlternateActors {
         player->AllowPCDialogue(true);
         player->AllowBleedoutDialogue(true);
 
-        _inSelfDialogue = true;
+        _inSelfDialogue.store(true, std::memory_order_release);
 
         SKSE::log::info("OpenSelfDialogueDirect: initiating SetDialogueWithPlayer on speaker {:08X} (isPuppet: {}, donor: {:08X}, voiceType: {:08X})",
             static_cast<std::uint32_t>(a_speaker->GetFormID()),
@@ -420,7 +429,7 @@ namespace AlternateActors {
             } else {
                 SKSE::log::error("Failed to open dialogue with actor {:08X} even with force-greet fallback",
                     static_cast<std::uint32_t>(a_speaker->GetFormID()));
-                _inSelfDialogue = false;
+                _inSelfDialogue.store(false, std::memory_order_release);
             }
             return greeted;
         }
@@ -432,7 +441,7 @@ namespace AlternateActors {
             return false;
         }
 
-        if (_inSelfDialogue) {
+        if (_inSelfDialogue.load(std::memory_order_acquire)) {
             return true;
         }
 
@@ -516,8 +525,9 @@ namespace AlternateActors {
     }
 
     bool IdleAIManager::CheckAndTriggerIdleDialogue() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         auto& impMgr = ImpersonationManager::GetSingleton();
-        if (!_isControllingNPC && !impMgr.IsActive()) {
+        if (!_isControllingNPC.load(std::memory_order_acquire) && !impMgr.IsActive()) {
             return false;
         }
 
@@ -686,6 +696,7 @@ namespace AlternateActors {
     }
 
     void IdleAIManager::SetActiveDonorActor(RE::Actor* a_donor) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         _activeDonorActor = a_donor ? a_donor->GetHandle() : RE::ActorHandle();
         if (a_donor) {
             auto* extraStyle = a_donor->extraList.GetByType<RE::ExtraCombatStyle>();
@@ -898,7 +909,7 @@ namespace AlternateActors {
         float actionElapsed = std::chrono::duration<float>(now - _lastCombatActionTime).count();
 
         // 5. Bow Draw & Release handling
-        if (_bowDrawn) {
+        if (_bowDrawn.load(std::memory_order_acquire)) {
             float drawElapsed = std::chrono::duration<float>(now - _bowDrawTime).count();
             float requiredDraw = hasCrossbow ? 0.3f : 1.2f;
 
@@ -906,7 +917,7 @@ namespace AlternateActors {
                 player->NotifyAnimationGraph("attackRelease");
                 player->NotifyAnimationGraph("arrowRelease");
                 bool relAnim = RE::CombatAnimation::Execute(player, target, RE::CombatAnimation::ANIM::kActionRightRelease);
-                _bowDrawn = false;
+                _bowDrawn.store(false, std::memory_order_release);
                 _lastCombatActionTime = now;
                 _currentActionCooldown = 1.3f;
                 SKSE::log::info("Combat AI: Released arrow/bolt at target {:08X} (dist: {:.1f}, exec={})",
@@ -970,7 +981,7 @@ namespace AlternateActors {
         // Bow / Crossbow attack
         if (hasBow || hasCrossbow) {
             if (fullDist <= 1800.0f) {
-                _bowDrawn = true;
+                _bowDrawn.store(true, std::memory_order_release);
                 _bowDrawTime = now;
                 _lastCombatActionTime = now;
 

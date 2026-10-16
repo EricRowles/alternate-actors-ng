@@ -210,11 +210,12 @@ namespace AlternateActors {
     RE::BGSVoiceType* ImpersonationManager::Hook_GetObjectVoiceType(const RE::TESNPC* a_this) {
         if (a_this) {
             auto& mgr = ImpersonationManager::GetSingleton();
-            if (mgr.IsActive() && mgr._donorVoiceType) {
+            auto* donorVoice = mgr._donorVoiceType.load(std::memory_order_acquire);
+            if (mgr.IsActive() && donorVoice) {
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 if (player && a_this == player->GetActorBase()) {
                     if (mgr.IsNPCVoiceEnabled()) {
-                        return mgr._donorVoiceType;
+                        return donorVoice;
                     }
                     return _origGetObjectVoiceType(a_this);
                 }
@@ -227,7 +228,7 @@ namespace AlternateActors {
                     if (topicMgr && (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress)) {
                         return nullptr;
                     }
-                    return mgr._donorVoiceType;
+                    return donorVoice;
                 }
                 if (a_this->voiceType) {
                     return a_this->voiceType;
@@ -261,10 +262,11 @@ namespace AlternateActors {
 
 
     void ImpersonationManager::OnDialogueResponseStarted(RE::DialogueResponse* a_response) {
-        _playerSpeaking.store(true, std::memory_order_relaxed);
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        _playerSpeaking.store(true, std::memory_order_release);
         _speechStartTime = std::chrono::steady_clock::now();
         _speechAudioEndTime = std::chrono::steady_clock::time_point{};
-        _speechHadSound.store(false, std::memory_order_relaxed);
+        _speechHadSound.store(false, std::memory_order_release);
         float textLen = 0.0f;
         if (a_response && !a_response->text.empty()) {
             textLen = static_cast<float>(a_response->text.length());
@@ -277,9 +279,12 @@ namespace AlternateActors {
             return;
         }
 
-        _playerSpeaking.store(false, std::memory_order_relaxed);
-        _speechHadSound.store(false, std::memory_order_relaxed);
-        _speechAudioEndTime = std::chrono::steady_clock::time_point{};
+        {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _playerSpeaking.store(false, std::memory_order_release);
+            _speechHadSound.store(false, std::memory_order_release);
+            _speechAudioEndTime = std::chrono::steady_clock::time_point{};
+        }
 
         if (a_player) {
             a_player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
@@ -343,7 +348,8 @@ namespace AlternateActors {
     }
 
     bool ImpersonationManager::CheckPlayerSpeakingDone() {
-        if (!_playerSpeaking.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_playerSpeaking.load(std::memory_order_acquire)) {
             return true;
         }
 
@@ -375,11 +381,11 @@ namespace AlternateActors {
 
         if (soundPlaying) {
             AttachSoundHandlesToHead(player);
-            if (!_speechHadSound.load(std::memory_order_relaxed)) {
+            if (!_speechHadSound.load(std::memory_order_acquire)) {
                 _speechStartTime = now;
                 elapsed = 0.0f;
             }
-            _speechHadSound.store(true, std::memory_order_relaxed);
+            _speechHadSound.store(true, std::memory_order_release);
 
             // Safety timeout of 25.0s in case sound loops
             if (elapsed < 25.0f) {
@@ -408,7 +414,7 @@ namespace AlternateActors {
             }
         }
 
-        if (_speechHadSound.load(std::memory_order_relaxed)) {
+        if (_speechHadSound.load(std::memory_order_acquire)) {
             // Audio was playing and has now finished!
             // Allow a brief grace period (up to 0.4s) if phonemes are still settling back to neutral
             if (phonemesActive && elapsed < 25.0f && _speechAudioEndTime == std::chrono::steady_clock::time_point{}) {
@@ -438,7 +444,8 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::SyncDonorUpdatesToPlayer() {
-        if (!_active.load(std::memory_order_relaxed)) return;
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_active.load(std::memory_order_acquire)) return;
         auto* donor = GetDonor();
         auto* player = GetPlayer();
         if (!donor || !player) return;
@@ -944,12 +951,14 @@ namespace AlternateActors {
             return 0;
         }
 
-        if (_active.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+
+        if (_active.load(std::memory_order_acquire)) {
             End();
         }
 
-        _donorActor.store(a_donor, std::memory_order_relaxed);
-        _playerActor.store(a_player, std::memory_order_relaxed);
+        _donorActor.store(a_donor, std::memory_order_release);
+        _playerActor.store(a_player, std::memory_order_release);
         _donorKeepAlive.reset(a_donor);
         _donorHandle = a_donor->GetHandle();
         _savedDonorFormID = a_donor->GetFormID();
@@ -979,9 +988,9 @@ namespace AlternateActors {
         }
 
         if (auto* base = a_donor->GetActorBase()) {
-            _donorVoiceType = GetNPCVoiceType(base);
+            _donorVoiceType.store(GetNPCVoiceType(base), std::memory_order_release);
         } else {
-            _donorVoiceType = nullptr;
+            _donorVoiceType.store(nullptr, std::memory_order_release);
         }
         _active.store(true, std::memory_order_release);
 
@@ -1001,12 +1010,13 @@ namespace AlternateActors {
     }
 
     std::int32_t ImpersonationManager::End() {
-        if (!_active.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (!_active.load(std::memory_order_acquire)) {
             return 0;
         }
 
-        auto* donor = _donorActor.load(std::memory_order_relaxed);
-        auto* player = _playerActor.load(std::memory_order_relaxed);
+        auto* donor = _donorActor.load(std::memory_order_acquire);
+        auto* player = _playerActor.load(std::memory_order_acquire);
 
         SKSE::log::info("Ending impersonation of donor {:08X}",
             donor ? static_cast<std::uint32_t>(donor->GetFormID()) : static_cast<std::uint32_t>(_savedDonorFormID)
@@ -1033,12 +1043,12 @@ namespace AlternateActors {
         }
 
         _active.store(false, std::memory_order_release);
-        _donorActor.store(nullptr, std::memory_order_relaxed);
-        _playerActor.store(nullptr, std::memory_order_relaxed);
+        _donorActor.store(nullptr, std::memory_order_release);
+        _playerActor.store(nullptr, std::memory_order_release);
         _donorKeepAlive.reset();
         _donorHandle.reset();
         _savedDonorFormID = 0;
-        _donorVoiceType = nullptr;
+        _donorVoiceType.store(nullptr, std::memory_order_release);
         _donorName.clear();
         _origPlayerName.clear();
 
@@ -1046,6 +1056,7 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::SetPuppet(RE::Actor* a_puppet) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_puppet) {
             _puppetHandle.reset();
             return;
@@ -1118,6 +1129,7 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::SetPuppetFollowsPlayer(bool a_follows) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         _options.puppetFollowsPlayer = a_follows;
         if (auto* puppet = GetPuppet()) {
             if (a_follows) {
@@ -1132,7 +1144,7 @@ namespace AlternateActors {
 
 
     void ImpersonationManager::Tick() {
-        if (_playerSpeaking.load(std::memory_order_relaxed)) {
+        if (_playerSpeaking.load(std::memory_order_acquire)) {
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto* ui = RE::UI::GetSingleton();
             bool menuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
@@ -1290,6 +1302,7 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::RetargetPackages(RE::Actor* a_donor, RE::Actor* a_player) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_donor || !a_player) return;
 
         RestorePackages();
@@ -1338,6 +1351,7 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::RestorePackages() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (_retargetedPackages.empty()) return;
 
         for (const auto& rec : _retargetedPackages) {
@@ -1385,8 +1399,9 @@ namespace AlternateActors {
     // --- Co-Save Serialization ---
     void ImpersonationManager::Save(SKSE::SerializationInterface* a_serde) {
         if (!a_serde) return;
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
 
-        bool active = _active.load(std::memory_order_relaxed);
+        bool active = _active.load(std::memory_order_acquire);
         RE::FormID donorID = _savedDonorFormID;
         if (active && donorID == 0 && _donorActor.load()) {
             donorID = _donorActor.load()->GetFormID();
@@ -1420,6 +1435,7 @@ namespace AlternateActors {
 
     void ImpersonationManager::Load(SKSE::SerializationInterface* a_serde, std::uint32_t /*a_version*/, std::uint32_t a_length) {
         if (!a_serde) return;
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
 
         bool active = false;
         RE::FormID donorID = 0;
@@ -1435,6 +1451,7 @@ namespace AlternateActors {
         a_serde->ReadRecordData(&puppetID, sizeof(puppetID));
         a_serde->ReadRecordData(&_options.npcVoice, sizeof(_options.npcVoice));
         a_serde->ReadRecordData(&_options.puppetFollowsPlayer, sizeof(_options.puppetFollowsPlayer));
+        _npcVoiceEnabled.store(_options.npcVoice, std::memory_order_release);
 
         std::size_t bytesRead = baseSize;
         if (a_length >= bytesRead + sizeof(std::uint32_t)) {
@@ -1477,8 +1494,8 @@ namespace AlternateActors {
             auto* donor = RE::TESForm::LookupByID<RE::Actor>(_savedDonorFormID);
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (donor && player) {
-                _donorActor.store(donor, std::memory_order_relaxed);
-                _playerActor.store(player, std::memory_order_relaxed);
+                _donorActor.store(donor, std::memory_order_release);
+                _playerActor.store(player, std::memory_order_release);
                 _donorKeepAlive.reset(donor);
                 _donorHandle = donor->GetHandle();
                 if (_donorName.empty()) {
@@ -1491,9 +1508,9 @@ namespace AlternateActors {
                     }
                 }
                 if (auto* base = donor->GetActorBase()) {
-                    _donorVoiceType = GetNPCVoiceType(base);
+                    _donorVoiceType.store(GetNPCVoiceType(base), std::memory_order_release);
                 } else {
-                    _donorVoiceType = nullptr;
+                    _donorVoiceType.store(nullptr, std::memory_order_release);
                 }
                 _active.store(true, std::memory_order_release);
                 SKSE::log::info("Restored impersonation state from co-save: Donor {:08X}", static_cast<std::uint32_t>(_savedDonorFormID));
@@ -1502,14 +1519,15 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::OnRevert() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         RestorePackages();
         _active.store(false, std::memory_order_release);
-        _donorActor.store(nullptr, std::memory_order_relaxed);
-        _playerActor.store(nullptr, std::memory_order_relaxed);
+        _donorActor.store(nullptr, std::memory_order_release);
+        _playerActor.store(nullptr, std::memory_order_release);
         _donorKeepAlive.reset();
         _donorHandle.reset();
         _savedDonorFormID = 0;
-        _donorVoiceType = nullptr;
+        _donorVoiceType.store(nullptr, std::memory_order_release);
         _donorName.clear();
         _origPlayerName.clear();
         SetPuppet(nullptr);
@@ -1517,7 +1535,8 @@ namespace AlternateActors {
     }
 
     void ImpersonationManager::OnPostLoadGame() {
-        if (_active.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
+        if (_active.load(std::memory_order_acquire)) {
             if (_origPlayerName.empty()) {
                 if (FaceManager::GetSingleton().HasSavedAppearance() &&
                     !FaceManager::GetSingleton().GetSavedAppearance().fullName.empty()) {
@@ -1525,17 +1544,18 @@ namespace AlternateActors {
                 }
             }
 
-            auto* donor = _donorActor.load(std::memory_order_relaxed);
-            auto* player = _playerActor.load(std::memory_order_relaxed);
+            auto* donor = _donorActor.load(std::memory_order_acquire);
+            auto* player = _playerActor.load(std::memory_order_acquire);
             if (donor && player) {
                 RetargetPackages(donor, player);
             }
 
             if (donor) {
                 if (auto* base = donor->GetActorBase()) {
-                    _donorVoiceType = GetNPCVoiceType(base);
+                    auto* voiceType = GetNPCVoiceType(base);
+                    _donorVoiceType.store(voiceType, std::memory_order_release);
                     SKSE::log::info("OnPostLoadGame: verified donor voice type {:08X}",
-                        _donorVoiceType ? static_cast<std::uint32_t>(_donorVoiceType->GetFormID()) : 0);
+                        voiceType ? static_cast<std::uint32_t>(voiceType->GetFormID()) : 0);
                 }
             }
             if (donor && player) {

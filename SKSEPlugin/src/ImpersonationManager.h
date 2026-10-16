@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -45,32 +46,50 @@ namespace AlternateActors {
         std::int32_t End();
         void Tick();
 
-        bool IsActive() const { return _active.load(std::memory_order_relaxed); }
+        bool IsActive() const { return _active.load(std::memory_order_acquire); }
         RE::Actor* GetDonor() const {
-            if (!_active.load(std::memory_order_relaxed)) return nullptr;
+            if (!_active.load(std::memory_order_acquire)) return nullptr;
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             auto handle = _donorHandle.get();
             return handle ? handle.get() : nullptr;
         }
-        RE::Actor* GetPlayer() const { return _playerActor.load(std::memory_order_relaxed); }
+        RE::Actor* GetPlayer() const { return _playerActor.load(std::memory_order_acquire); }
 
-        const std::string& GetDonorName() const { return _donorName; }
-        const std::string& GetOrigPlayerName() const { return _origPlayerName; }
-        RE::BGSVoiceType* GetDonorVoiceType() const { return _donorVoiceType; }
+        std::string GetDonorName() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _donorName;
+        }
+        std::string GetOrigPlayerName() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _origPlayerName;
+        }
+        RE::BGSVoiceType* GetDonorVoiceType() const { return _donorVoiceType.load(std::memory_order_acquire); }
         void SetPuppet(RE::Actor* a_puppet);
         RE::Actor* GetPuppet() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
             auto handle = _puppetHandle.get();
             return handle ? handle.get() : nullptr;
         }
 
-        const ImpersonationOptions& GetOptions() const { return _options; }
-        bool IsConditionsEnabled() const { return _active.load(std::memory_order_relaxed); }
+        ImpersonationOptions GetOptions() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _options;
+        }
+        bool IsConditionsEnabled() const { return _active.load(std::memory_order_acquire); }
 
-        void SetNPCVoiceEnabled(bool a_enabled) { _options.npcVoice = a_enabled; }
-        bool IsNPCVoiceEnabled() const { return _options.npcVoice; }
+        void SetNPCVoiceEnabled(bool a_enabled) {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            _options.npcVoice = a_enabled;
+            _npcVoiceEnabled.store(a_enabled, std::memory_order_release);
+        }
+        bool IsNPCVoiceEnabled() const { return _npcVoiceEnabled.load(std::memory_order_acquire); }
 
 
         void SetPuppetFollowsPlayer(bool a_follows);
-        bool DoesPuppetFollowPlayer() const { return _options.puppetFollowsPlayer; }
+        bool DoesPuppetFollowPlayer() const {
+            std::lock_guard<std::recursive_mutex> lock(_mutex);
+            return _options.puppetFollowsPlayer;
+        }
 
 
         void Save(SKSE::SerializationInterface* a_serde);
@@ -83,10 +102,10 @@ namespace AlternateActors {
         void ResetSpeechTracking();
         bool CheckPlayerSpeakingDone();
         void OnDialogueResponseStarted(RE::DialogueResponse* a_response);
-        bool IsPlayerSpeaking() const { return _playerSpeaking.load(std::memory_order_relaxed); }
-        void SetPlayerSpeaking(bool a_speaking) { _playerSpeaking.store(a_speaking, std::memory_order_relaxed); }
+        bool IsPlayerSpeaking() const { return _playerSpeaking.load(std::memory_order_acquire); }
+        void SetPlayerSpeaking(bool a_speaking) { _playerSpeaking.store(a_speaking, std::memory_order_release); }
         void CompleteSpeaking(RE::Actor* a_player);
-        bool IsInCompleteSpeaking() const { return _inCompleteSpeaking.load(std::memory_order_relaxed); }
+        bool IsInCompleteSpeaking() const { return _inCompleteSpeaking.load(std::memory_order_acquire); }
         static void AttachSoundHandlesToHead(RE::Actor* a_actor);
         bool HandleProxyDialogueOutput(RE::Actor* a_speaker, RE::DialogueResponse* a_response, bool a_unused);
         void SyncDonorUpdatesToPlayer();
@@ -162,13 +181,15 @@ namespace AlternateActors {
             PackageRetargetType a_handleType,
             PackageRetargetType a_objType);
 
+        mutable std::recursive_mutex _mutex;
         std::atomic<bool> _active{ false };
         std::atomic<RE::Actor*> _donorActor{ nullptr };
         std::atomic<RE::Actor*> _playerActor{ nullptr };
         RE::NiPointer<RE::Actor> _donorKeepAlive;
         RE::ActorHandle _donorHandle;
         RE::FormID _savedDonorFormID{ 0 };
-        RE::BGSVoiceType* _donorVoiceType{ nullptr };
+        std::atomic<RE::BGSVoiceType*> _donorVoiceType{ nullptr };
+        std::atomic<bool> _npcVoiceEnabled{ true };
         std::string _donorName;
         std::string _origPlayerName;
         RE::ActorHandle _puppetHandle;

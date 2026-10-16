@@ -36,6 +36,7 @@ namespace AlternateActors {
     }
 
     bool AliasManager::HasRecord(RE::FormID a_questFormID, std::uint32_t a_aliasID) const {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         for (const auto& r : _swappedRecords) {
             if (r.questFormID == a_questFormID && r.aliasID == a_aliasID) {
                 return true;
@@ -45,6 +46,7 @@ namespace AlternateActors {
     }
 
     std::int32_t AliasManager::SwapAliasesToPlayer(RE::Actor* a_donor, RE::Actor* a_player) {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (!a_donor || !a_player) {
             SKSE::log::warn("SwapAliasesToPlayer called with null actor pointers.");
             return 0;
@@ -129,6 +131,7 @@ namespace AlternateActors {
     }
 
     std::int32_t AliasManager::RestoreAliases() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         if (_swappedRecords.empty()) {
             SKSE::log::info("RestoreAliases called, but no swapped aliases were tracked.");
             return 0;
@@ -198,10 +201,12 @@ namespace AlternateActors {
     }
 
     void AliasManager::Clear() {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         _swappedRecords.clear();
     }
 
     std::vector<RE::TESPackage*> AliasManager::GetAliasPackages(RE::Actor* a_actor) const {
+        std::lock_guard<std::recursive_mutex> lock(_mutex);
         std::vector<RE::TESPackage*> result;
         if (!a_actor) return result;
 
