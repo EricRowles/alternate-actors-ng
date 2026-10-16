@@ -25,53 +25,125 @@
 
 namespace AlternateActors {
 
-    static std::array<RE::SCRIPT_FUNCTION::Condition_t*, 0x300> s_originalConditions{ nullptr };
+    enum class IdentityCondition : std::uint8_t {
+        kGetInFaction = 0,
+        kGetIsID,
+        kGetFactionRank,
+        kGetIsReference,
+        kGetIsAliasRef,
+        kGetIsVoiceType,
+        kIsInList,
+        kTotal
+    };
+
+    static std::array<RE::SCRIPT_FUNCTION::Condition_t*, static_cast<std::size_t>(IdentityCondition::kTotal)> s_originalConditions{ nullptr };
+
+    static RE::SCRIPT_FUNCTION* FindScriptCommandTable() {
+        auto textSegment = REL::Module::get().segment(REL::Segment::textx);
+        const auto* scanStart = reinterpret_cast<const std::uint8_t*>(textSegment.address());
+        const auto scanSize = textSegment.size();
+
+        if (scanStart && scanSize > 32) {
+            // Pattern: 81 C1 00 F0 FF FF 81 F9 E0 02 00 00 (add ecx, -0x1000; cmp ecx, 0x2e0)
+            const std::uint8_t pattern[] = {
+                0x81, 0xC1, 0x00, 0xF0, 0xFF, 0xFF, 0x81, 0xF9, 0xE0, 0x02, 0x00, 0x00
+            };
+            const auto end = scanStart + scanSize - sizeof(pattern) - 32;
+            for (const auto* p = scanStart; p < end; ++p) {
+                if (std::memcmp(p, pattern, sizeof(pattern)) == 0) {
+                    // Check for LEA rcx, [rip + disp32] (48 8D 0D [disp32]) at p + 17
+                    if (p[17] == 0x48 && p[18] == 0x8D && p[19] == 0x0D) {
+                        std::int32_t disp = *reinterpret_cast<const std::int32_t*>(p + 20);
+                        auto tableAddr = reinterpret_cast<std::uintptr_t>(p + 24) + disp;
+                        auto* table = reinterpret_cast<RE::SCRIPT_FUNCTION*>(tableAddr);
+                        SKSE::log::info("Found script command table via pattern scan at {:016X}", tableAddr);
+                        return table;
+                    }
+                }
+            }
+        }
+        SKSE::log::error("Failed to find script command table via pattern scan!");
+        return nullptr;
+    }
 
     // --- Category A: Identity Thunk ---
-    template <std::uint16_t ID>
+    template <IdentityCondition Cond>
     static bool IdentityThunk(RE::TESObjectREFR* a_thisObj, void* a_p1, void* a_p2, double& a_result) {
         auto& mgr = ImpersonationManager::GetSingleton();
-        auto* orig = s_originalConditions[ID];
+        constexpr auto idx = static_cast<std::size_t>(Cond);
+        auto* orig = s_originalConditions[idx];
+        if (!orig) return false;
         if (!mgr.IsConditionsEnabled()) {
-            return orig ? orig(a_thisObj, a_p1, a_p2, a_result) : false;
+            return orig(a_thisObj, a_p1, a_p2, a_result);
         }
 
         auto* player = mgr.GetPlayer();
+        if (!player) {
+            player = RE::PlayerCharacter::GetSingleton();
+        }
         auto* donor = mgr.GetDonor();
         auto* puppet = mgr.GetPuppet();
 
         // 1. Run original condition check first
         double res = 0.0;
-        bool ok = orig ? orig(a_thisObj, a_p1, a_p2, res) : false;
-        if (ok && res != 0.0) {
+        bool ok = orig(a_thisObj, a_p1, a_p2, res);
+
+        bool matched = false;
+        if (ok) {
+            if constexpr (Cond == IdentityCondition::kGetFactionRank) {
+                matched = (res >= 0.0);
+            } else {
+                matched = (res != 0.0);
+            }
+        }
+
+        if (matched) {
             a_result = res;
             return true;
         }
 
-        // 2. If checking on player OR (puppet during self-dialogue), try substituting donor
+        // 2. If checking on player OR (puppet during self-dialogue), try donor (and player if checking puppet)
         bool isSelfDialogue = IdleAIManager::GetSingleton().IsInSelfDialogue();
         if (a_thisObj && (a_thisObj == player || (puppet && a_thisObj == puppet && isSelfDialogue))) {
             bool isPuppetSelf = (puppet && a_thisObj == puppet && isSelfDialogue);
-            if constexpr (ID == 426) {
-                auto* targetVoice = static_cast<RE::TESForm*>(a_p1);
-                if (targetVoice && mgr.GetDonorVoiceType() && targetVoice == mgr.GetDonorVoiceType()) {
-                    if (isPuppetSelf || mgr.IsNPCVoiceEnabled()) {
-                        a_result = 1.0;
+
+            // When evaluating the puppet in self-dialogue, check the Player character!
+            // Follower factions (CurrentFollowerFaction, DismissedFollowerFaction)
+            // or dialogue-induced faction changes exist on the player actor during possession.
+            if (isPuppetSelf && player && player != a_thisObj) {
+                double playerRes = 0.0;
+                if (orig(player, a_p1, a_p2, playerRes)) {
+                    bool playerMatched = false;
+                    if constexpr (Cond == IdentityCondition::kGetFactionRank) {
+                        playerMatched = (playerRes >= 0.0);
+                    } else {
+                        playerMatched = (playerRes != 0.0);
+                    }
+                    if (playerMatched) {
+                        a_result = playerRes;
                         return true;
                     }
                 }
             }
 
-
-            if (donor) {
+            // Check donor
+            if (donor && donor != a_thisObj) {
                 double donorRes = 0.0;
-                if (orig && orig(donor, a_p1, a_p2, donorRes) && donorRes != 0.0) {
-                    a_result = donorRes;
-                    return true;
+                if (orig(donor, a_p1, a_p2, donorRes)) {
+                    bool donorMatched = false;
+                    if constexpr (Cond == IdentityCondition::kGetFactionRank) {
+                        donorMatched = (donorRes >= 0.0);
+                    } else {
+                        donorMatched = (donorRes != 0.0);
+                    }
+                    if (donorMatched) {
+                        a_result = donorRes;
+                        return true;
+                    }
                 }
 
-                // Fallback for leveled donors in GetIsID (72)
-                if constexpr (ID == 72) {
+                // Fallback for leveled donors in GetIsID
+                if constexpr (Cond == IdentityCondition::kGetIsID) {
                     auto* targetForm = static_cast<RE::TESForm*>(a_p1);
                     if (targetForm) {
                         if (targetForm == donor->GetBaseObject()) {
@@ -92,14 +164,23 @@ namespace AlternateActors {
                         }
                     }
                 }
+
+                // Direct match for GetIsVoiceType
+                if constexpr (Cond == IdentityCondition::kGetIsVoiceType) {
+                    auto* targetVoice = static_cast<RE::BGSVoiceType*>(a_p1);
+                    if (targetVoice && mgr.GetDonorVoiceType() && targetVoice == mgr.GetDonorVoiceType()) {
+                        a_result = 1.0;
+                        return true;
+                    }
+                }
             }
         }
 
-        // 3. Special case for GetIsAliasRef (566): if checking on donor or puppet, retry with player
-        if constexpr (ID == 566) {
-            if (a_thisObj && (a_thisObj == donor || (puppet && a_thisObj == puppet && isSelfDialogue)) && player) {
+        // 3. Special case for GetIsAliasRef: if checking on donor or puppet, retry with player
+        if constexpr (Cond == IdentityCondition::kGetIsAliasRef) {
+            if (a_thisObj && (a_thisObj == donor || (puppet && a_thisObj == puppet && isSelfDialogue)) && player && player != a_thisObj) {
                 double playerRes = 0.0;
-                if (orig && orig(player, a_p1, a_p2, playerRes) && playerRes != 0.0) {
+                if (orig(player, a_p1, a_p2, playerRes) && playerRes != 0.0) {
                     a_result = playerRes;
                     return true;
                 }
@@ -139,11 +220,14 @@ namespace AlternateActors {
                 }
 
                 auto* puppet = mgr.GetPuppet();
-                if (puppet && a_this == puppet->GetActorBase()) {
-                    if (IdleAIManager::GetSingleton().IsInSelfDialogue()) {
-                        return mgr._donorVoiceType;
+                bool isPuppet = (puppet && a_this == puppet->GetActorBase()) ||
+                                (a_this && ((a_this->GetFormID() & 0x00FFFFFF) == 0x00000D93 || (a_this->GetFormID() & 0x00FFFFFF) == 0x00000D94));
+                if (isPuppet) {
+                    auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+                    if (topicMgr && (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress)) {
+                        return nullptr;
                     }
-                    return nullptr;
+                    return mgr._donorVoiceType;
                 }
                 if (a_this->voiceType) {
                     return a_this->voiceType;
@@ -222,18 +306,33 @@ namespace AlternateActors {
         }
 
         // Advance MenuTopicManager
+        auto* ui = RE::UI::GetSingleton();
         auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        bool menuOpen = (ui && ui->IsMenuOpen("Dialogue Menu"sv)) || (topicMgr && (topicMgr->menuOpen || topicMgr->isGreetingPlayer));
         if (topicMgr) {
             SKSE::log::info("CompleteSpeaking: signaling MenuTopicManager to advance (waitingToAdvance: {})",
                 topicMgr->waitingToAdvance);
             topicMgr->canSkip = true;
             topicMgr->advanceRequested = true;
             if (puppet) {
-                topicMgr->lastSpeaker = puppet->GetHandle();
+                if (menuOpen) {
+                    topicMgr->lastSpeaker = puppet->GetHandle();
+                } else {
+                    if (topicMgr->speaker == puppet->GetHandle()) {
+                        topicMgr->speaker.reset();
+                    }
+                    if (topicMgr->lastSpeaker == puppet->GetHandle()) {
+                        topicMgr->lastSpeaker.reset();
+                    }
+                }
             }
         }
 
         IdleAIManager::GetSingleton().ClearCurrentDialogueItem();
+
+        if (!menuOpen) {
+            IdleAIManager::GetSingleton().SetInSelfDialogue(false);
+        }
 
         _inCompleteSpeaking.store(false);
     }
@@ -418,32 +517,49 @@ namespace AlternateActors {
         }
 
         if (a_response != nullptr) {
+            auto* topicMgr = RE::MenuTopicManager::GetSingleton();
             bool inSelf = IdleAIManager::GetSingleton().IsInSelfDialogue();
             auto* ui = RE::UI::GetSingleton();
-            bool menuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
+            bool menuOpen = (ui && ui->IsMenuOpen("Dialogue Menu"sv)) || (topicMgr && (topicMgr->menuOpen || topicMgr->isGreetingPlayer));
             auto* donor = GetDonor();
             bool isDonor = (donor && a_speaker == donor);
             auto* puppet = GetPuppet();
             bool isPuppet = (puppet && a_speaker == puppet);
 
-            auto* topicMgr = RE::MenuTopicManager::GetSingleton();
             bool inTopicWithSpeaker = false;
             if (topicMgr && (isPuppet || isDonor)) {
                 auto spkHandle = a_speaker->GetHandle();
-                if (topicMgr->speaker == spkHandle || topicMgr->lastSpeaker == spkHandle) {
+                if (menuOpen && (topicMgr->speaker == spkHandle || topicMgr->lastSpeaker == spkHandle)) {
                     inTopicWithSpeaker = true;
                 }
             }
 
-            // Suppress automatic puppet NPC goodbye farewell blurbs (subtype kGoodBye = 78)
-            bool isNpcGoodbye = (topicMgr && topicMgr->currentTopicInfo && topicMgr->currentTopicInfo->parentTopic &&
-                                 topicMgr->currentTopicInfo->parentTopic->data.subtype.get() == RE::DIALOGUE_DATA::Subtype::kGoodBye);
-            if (isPuppet && isNpcGoodbye) {
-                SKSE::log::info("Suppressing puppet NPC goodbye farewell line: '{}'", a_response->text.c_str());
+            // Suppress automatic puppet NPC goodbye farewell blurbs
+            bool isGoodbye = false;
+            if (topicMgr) {
+                if (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress) {
+                    isGoodbye = true;
+                }
+                auto checkSubtypeGoodbye = [](RE::TESTopicInfo* info) -> bool {
+                    if (!info || !info->parentTopic) return false;
+                    auto st = info->parentTopic->data.subtype.get();
+                    return (st == RE::DIALOGUE_DATA::Subtype::kGoodBye || st == RE::DIALOGUE_DATA::Subtype::kTimeToGo);
+                };
+                if (checkSubtypeGoodbye(topicMgr->currentTopicInfo) || checkSubtypeGoodbye(topicMgr->lastTopicInfo)) {
+                    isGoodbye = true;
+                }
+            }
+
+            // Allow speech ONLY if actively in conversation:
+            // self-dialogue flag set, dialogue menu actively open, or MenuTopicManager active with this speaker.
+            bool inActiveConversation = inSelf || menuOpen || inTopicWithSpeaker;
+
+            if (isPuppet && (isGoodbye || !inActiveConversation)) {
+                SKSE::log::info("Suppressing puppet dialogue exit/goodbye/ambient line: '{}'", a_response->text.c_str());
                 return false;
             }
 
-            if (inSelf || menuOpen || inTopicWithSpeaker || isDonor || isPuppet) {
+            if (inActiveConversation) {
                 SKSE::log::info("Decoupled proxy dialogue: text='{}', voice='{}', sound={:08X}",
                     a_response->text.c_str(),
                     a_response->voice.c_str(),
@@ -514,8 +630,8 @@ namespace AlternateActors {
 
                 return ret;
             } else {
-                // Suppress proxy actor spontaneous idle speech outside self-dialogue
-                SKSE::log::info("Suppressing proxy actor spontaneous idle speech: '{}'", a_response->text.c_str());
+                // Suppress proxy actor spontaneous idle speech outside active conversation
+                SKSE::log::info("Suppressing proxy actor spontaneous idle speech outside conversation: '{}'", a_response->text.c_str());
                 return false;
             }
         } else {
@@ -556,7 +672,7 @@ namespace AlternateActors {
                     a_this->SetEmotionValue(a_response->percent);
                 }
                 mgr.OnDialogueResponseStarted(a_response);
-                bool ret = _origCharUpdateInDialogue(a_this, a_response, a_unused);
+                bool ret = _origPlayerUpdateInDialogue(a_this, a_response, a_unused);
                 AttachSoundHandlesToHead(a_this);
                 return ret;
             }
@@ -650,6 +766,17 @@ namespace AlternateActors {
                     SKSE::log::info("Hook_SetDialogueWithPlayer: actor {:08X} (isPuppet: {}), flag: {}, forceGreet: {}",
                         static_cast<std::uint32_t>(a_this->GetFormID()), (a_this == puppet), a_flag, a_forceGreet);
                     IdleAIManager::GetSingleton().SetInSelfDialogue(a_flag);
+                    if (!a_flag && a_this == puppet) {
+                        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+                        if (topicMgr) {
+                            if (topicMgr->speaker == a_this->GetHandle()) {
+                                topicMgr->speaker.reset();
+                            }
+                            if (topicMgr->lastSpeaker == a_this->GetHandle()) {
+                                topicMgr->lastSpeaker.reset();
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -772,32 +899,39 @@ namespace AlternateActors {
         _origPlayerSetSpeakingDone = playerVtbl.write_vfunc(0x108, &Hook_Player_SetSpeakingDone);
         SKSE::log::info("Hooked PlayerCharacter editor location, dialogue & update vfuncs (0x3C, 0x3D, 0x4C, 0x7D, 0x107, 0x108)");
 
-        auto* commands = RE::SCRIPT_FUNCTION::GetFirstScriptCommand();
-        if (!commands) {
-            SKSE::log::error("SCRIPT_FUNCTION::GetFirstScriptCommand returned null!");
-            return;
+        auto* table = FindScriptCommandTable();
+        if (table) {
+            std::size_t hookedCount = 0;
+            for (std::size_t i = 0; i < 0x2E0; ++i) {
+                auto& entry = table[i];
+                if (!entry.functionName) continue;
+
+                auto hookEntry = [&](IdentityCondition cond, const char* name, RE::SCRIPT_FUNCTION::Condition_t* thunk) {
+                    if (_stricmp(entry.functionName, name) == 0) {
+                        auto idx = static_cast<std::size_t>(cond);
+                        s_originalConditions[idx] = entry.conditionFunction;
+                        REL::safe_write(reinterpret_cast<std::uintptr_t>(&entry.conditionFunction), reinterpret_cast<std::uintptr_t>(thunk));
+                        SKSE::log::info("Hooked condition '{}' at table index {} (orig: {:016X})",
+                            name, i, reinterpret_cast<std::uintptr_t>(s_originalConditions[idx]));
+                        hookedCount++;
+                    }
+                };
+
+                hookEntry(IdentityCondition::kGetInFaction, "GetInFaction", &IdentityThunk<IdentityCondition::kGetInFaction>);
+                hookEntry(IdentityCondition::kGetIsID, "GetIsID", &IdentityThunk<IdentityCondition::kGetIsID>);
+                hookEntry(IdentityCondition::kGetFactionRank, "GetFactionRank", &IdentityThunk<IdentityCondition::kGetFactionRank>);
+                hookEntry(IdentityCondition::kGetIsReference, "GetIsReference", &IdentityThunk<IdentityCondition::kGetIsReference>);
+                hookEntry(IdentityCondition::kGetIsAliasRef, "GetIsAliasRef", &IdentityThunk<IdentityCondition::kGetIsAliasRef>);
+                hookEntry(IdentityCondition::kGetIsVoiceType, "GetIsVoiceType", &IdentityThunk<IdentityCondition::kGetIsVoiceType>);
+                hookEntry(IdentityCondition::kIsInList, "IsInList", &IdentityThunk<IdentityCondition::kIsInList>);
+            }
+            SKSE::log::info("Successfully installed {} script condition hooks into command table.", hookedCount);
+        } else {
+            SKSE::log::error("Could not find script command table, condition hooks NOT installed!");
         }
 
-        auto hook = [&](std::uint16_t id, RE::SCRIPT_FUNCTION::Condition_t* newFunc) {
-            if (id >= s_originalConditions.size()) return;
-            if (!commands[id].conditionFunction) {
-                SKSE::log::warn("Script command ID {} has no conditionFunction, skipping hook.", id);
-                return;
-            }
-            s_originalConditions[id] = commands[id].conditionFunction;
-            REL::safe_write(reinterpret_cast<std::uintptr_t>(&commands[id].conditionFunction), reinterpret_cast<std::uintptr_t>(newFunc));
-        };
-
-        // Category A - Identity Conditions
-        hook(72, IdentityThunk<72>);    // GetIsID
-        hook(73, IdentityThunk<73>);    // GetInFaction
-        hook(136, IdentityThunk<136>);  // GetIsReference
-        hook(372, IdentityThunk<372>);  // IsInList
-        hook(426, IdentityThunk<426>);  // GetIsVoiceType
-        hook(566, IdentityThunk<566>);  // GetIsAliasRef
-
         _hooksInstalled = true;
-        SKSE::log::info("Installed 6 Impersonation identity condition function hooks and dialogue vfunc hooks successfully.");
+        SKSE::log::info("Installed Impersonation identity condition function hooks and dialogue vfunc hooks successfully.");
     }
 
     void ImpersonationManager::Initialize() {
@@ -917,6 +1051,10 @@ namespace AlternateActors {
             return;
         }
 
+        if (_puppetHandle == a_puppet->GetHandle()) {
+            return;
+        }
+
         _puppetHandle = a_puppet->GetHandle();
 
         // Ensure puppet actor base never has faceNPC template attached
@@ -995,6 +1133,13 @@ namespace AlternateActors {
 
     void ImpersonationManager::Tick() {
         if (_playerSpeaking.load(std::memory_order_relaxed)) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* ui = RE::UI::GetSingleton();
+            bool menuOpen = ui && ui->IsMenuOpen("Dialogue Menu"sv);
+            if (player && !menuOpen) {
+                _origPlayerUpdateInDialogue(player, nullptr, false);
+                AttachSoundHandlesToHead(player);
+            }
             CheckPlayerSpeakingDone();
         }
 
@@ -1044,10 +1189,11 @@ namespace AlternateActors {
             if (a_loc->data.refHandle == donorHandle) {
                 PackageRetargetRecord rec;
                 rec.package = a_pkg;
+                rec.packageFormID = a_pkg->GetFormID();
                 rec.type = a_handleType;
                 rec.targetPtr = a_loc;
                 rec.origHandle = a_loc->data.refHandle;
-                rec.origObject = a_loc->data.object;
+                rec.origObject = nullptr;
                 _retargetedPackages.push_back(rec);
 
                 a_loc->data.refHandle = playerHandle;
@@ -1056,9 +1202,10 @@ namespace AlternateActors {
             if (a_loc->data.object == donorBase || a_loc->data.object == donorActorBase || a_loc->data.object == a_donor) {
                 PackageRetargetRecord rec;
                 rec.package = a_pkg;
+                rec.packageFormID = a_pkg->GetFormID();
                 rec.type = a_objType;
                 rec.targetPtr = a_loc;
-                rec.origHandle = a_loc->data.refHandle;
+                rec.origHandle.reset();
                 rec.origObject = a_loc->data.object;
                 _retargetedPackages.push_back(rec);
 
@@ -1088,23 +1235,25 @@ namespace AlternateActors {
         auto* puppetBase = puppet ? puppet->GetBaseObject() : nullptr;
 
         if (a_targ->targType == 0) { // Specific Reference
-            if (a_targ->target.handle == donorHandle || a_targ->target.object == a_donor) {
+            if (a_targ->target.handle == donorHandle) {
                 PackageRetargetRecord rec;
                 rec.package = a_pkg;
+                rec.packageFormID = a_pkg->GetFormID();
                 rec.type = a_handleType;
                 rec.targetPtr = a_targ;
                 rec.origHandle = a_targ->target.handle;
-                rec.origObject = a_targ->target.object;
+                rec.origObject = nullptr;
                 _retargetedPackages.push_back(rec);
 
                 a_targ->target.handle = playerHandle;
-            } else if (puppet && (a_targ->target.handle == playerHandle || a_targ->target.object == a_player || a_targ->target.object == playerBase)) {
+            } else if (puppet && a_targ->target.handle == playerHandle) {
                 PackageRetargetRecord rec;
                 rec.package = a_pkg;
+                rec.packageFormID = a_pkg->GetFormID();
                 rec.type = a_handleType;
                 rec.targetPtr = a_targ;
                 rec.origHandle = a_targ->target.handle;
-                rec.origObject = a_targ->target.object;
+                rec.origObject = nullptr;
                 _retargetedPackages.push_back(rec);
 
                 a_targ->target.handle = puppetHandle;
@@ -1115,9 +1264,10 @@ namespace AlternateActors {
             if (a_targ->target.object == donorBase || a_targ->target.object == donorActorBase || a_targ->target.object == a_donor) {
                 PackageRetargetRecord rec;
                 rec.package = a_pkg;
+                rec.packageFormID = a_pkg->GetFormID();
                 rec.type = a_objType;
                 rec.targetPtr = a_targ;
-                rec.origHandle = a_targ->target.handle;
+                rec.origHandle.reset();
                 rec.origObject = a_targ->target.object;
                 _retargetedPackages.push_back(rec);
 
@@ -1125,9 +1275,10 @@ namespace AlternateActors {
             } else if (puppet && puppetBase && (a_targ->target.object == playerBase || a_targ->target.object == a_player)) {
                 PackageRetargetRecord rec;
                 rec.package = a_pkg;
+                rec.packageFormID = a_pkg->GetFormID();
                 rec.type = a_objType;
                 rec.targetPtr = a_targ;
-                rec.origHandle = a_targ->target.handle;
+                rec.origHandle.reset();
                 rec.origObject = a_targ->target.object;
                 _retargetedPackages.push_back(rec);
 
@@ -1170,6 +1321,13 @@ namespace AlternateActors {
                             if (locData && locData->pointer) {
                                 CheckAndRetargetLocation(pkg, locData->pointer, a_donor, a_player, PackageRetargetType::kCustomLocHandle, PackageRetargetType::kCustomLocObject);
                             }
+                        } else if (vtbl == RE::VTABLE_BGSPackageDataTargetSelector[0].address() ||
+                                   vtbl == RE::VTABLE_BGSPackageDataRef[0].address() ||
+                                   vtbl == RE::VTABLE_BGSPackageDataRef[1].address()) {
+                            auto* targPtr = *reinterpret_cast<RE::PackageTarget**>(reinterpret_cast<std::uintptr_t>(entry) + 0x18);
+                            if (targPtr) {
+                                CheckAndRetargetTarget(pkg, targPtr, a_donor, a_player, PackageRetargetType::kCustomTargHandle, PackageRetargetType::kCustomTargObject);
+                            }
                         }
                     }
                 }
@@ -1185,33 +1343,36 @@ namespace AlternateActors {
         for (const auto& rec : _retargetedPackages) {
             if (!rec.targetPtr) continue;
 
+            if (rec.packageFormID != 0) {
+                auto* pkg = RE::TESForm::LookupByID<RE::TESPackage>(rec.packageFormID);
+                if (!pkg) {
+                    continue;
+                }
+            }
+
             switch (rec.type) {
                 case PackageRetargetType::kPackLocHandle:
                 case PackageRetargetType::kCustomLocHandle: {
                     auto* loc = static_cast<RE::PackageLocation*>(rec.targetPtr);
                     loc->data.refHandle = rec.origHandle;
-                    loc->data.object = rec.origObject;
                     break;
                 }
                 case PackageRetargetType::kPackLocObject:
                 case PackageRetargetType::kCustomLocObject: {
                     auto* loc = static_cast<RE::PackageLocation*>(rec.targetPtr);
                     loc->data.object = rec.origObject;
-                    loc->data.refHandle = rec.origHandle;
                     break;
                 }
                 case PackageRetargetType::kPackTargHandle:
                 case PackageRetargetType::kCustomTargHandle: {
                     auto* targ = static_cast<RE::PackageTarget*>(rec.targetPtr);
                     targ->target.handle = rec.origHandle;
-                    targ->target.object = rec.origObject;
                     break;
                 }
                 case PackageRetargetType::kPackTargObject:
                 case PackageRetargetType::kCustomTargObject: {
                     auto* targ = static_cast<RE::PackageTarget*>(rec.targetPtr);
                     targ->target.object = rec.origObject;
-                    targ->target.handle = rec.origHandle;
                     break;
                 }
             }
@@ -1242,6 +1403,18 @@ namespace AlternateActors {
             a_serde->WriteRecordData(&puppetID, sizeof(puppetID));
             a_serde->WriteRecordData(&_options.npcVoice, sizeof(_options.npcVoice));
             a_serde->WriteRecordData(&_options.puppetFollowsPlayer, sizeof(_options.puppetFollowsPlayer));
+
+            std::uint32_t origLen = static_cast<std::uint32_t>(_origPlayerName.size());
+            a_serde->WriteRecordData(&origLen, sizeof(origLen));
+            if (origLen > 0) {
+                a_serde->WriteRecordData(_origPlayerName.data(), origLen);
+            }
+
+            std::uint32_t donorLen = static_cast<std::uint32_t>(_donorName.size());
+            a_serde->WriteRecordData(&donorLen, sizeof(donorLen));
+            if (donorLen > 0) {
+                a_serde->WriteRecordData(_donorName.data(), donorLen);
+            }
         }
     }
 
@@ -1252,7 +1425,8 @@ namespace AlternateActors {
         RE::FormID donorID = 0;
         RE::FormID puppetID = 0;
 
-        if (a_length < (sizeof(active) + sizeof(donorID) + sizeof(puppetID) + sizeof(_options.npcVoice) + sizeof(_options.puppetFollowsPlayer))) {
+        constexpr std::size_t baseSize = sizeof(active) + sizeof(donorID) + sizeof(puppetID) + sizeof(_options.npcVoice) + sizeof(_options.puppetFollowsPlayer);
+        if (a_length < baseSize) {
             return;
         }
 
@@ -1261,6 +1435,30 @@ namespace AlternateActors {
         a_serde->ReadRecordData(&puppetID, sizeof(puppetID));
         a_serde->ReadRecordData(&_options.npcVoice, sizeof(_options.npcVoice));
         a_serde->ReadRecordData(&_options.puppetFollowsPlayer, sizeof(_options.puppetFollowsPlayer));
+
+        std::size_t bytesRead = baseSize;
+        if (a_length >= bytesRead + sizeof(std::uint32_t)) {
+            std::uint32_t origLen = 0;
+            a_serde->ReadRecordData(&origLen, sizeof(origLen));
+            bytesRead += sizeof(origLen);
+            if (origLen > 0 && a_length >= bytesRead + origLen) {
+                std::string s(origLen, '\0');
+                a_serde->ReadRecordData(s.data(), origLen);
+                _origPlayerName = s;
+                bytesRead += origLen;
+            }
+            if (a_length >= bytesRead + sizeof(std::uint32_t)) {
+                std::uint32_t donorLen = 0;
+                a_serde->ReadRecordData(&donorLen, sizeof(donorLen));
+                bytesRead += sizeof(donorLen);
+                if (donorLen > 0 && a_length >= bytesRead + donorLen) {
+                    std::string s(donorLen, '\0');
+                    a_serde->ReadRecordData(s.data(), donorLen);
+                    _donorName = s;
+                    bytesRead += donorLen;
+                }
+            }
+        }
 
         if (a_serde->ResolveFormID(donorID, donorID)) {
             _savedDonorFormID = donorID;
@@ -1283,8 +1481,15 @@ namespace AlternateActors {
                 _playerActor.store(player, std::memory_order_relaxed);
                 _donorKeepAlive.reset(donor);
                 _donorHandle = donor->GetHandle();
-                _donorName = donor->GetName();
-                _origPlayerName = player->GetName();
+                if (_donorName.empty()) {
+                    _donorName = donor->GetName();
+                }
+                if (_origPlayerName.empty()) {
+                    if (FaceManager::GetSingleton().HasSavedAppearance() &&
+                        !FaceManager::GetSingleton().GetSavedAppearance().fullName.empty()) {
+                        _origPlayerName = FaceManager::GetSingleton().GetSavedAppearance().fullName.c_str();
+                    }
+                }
                 if (auto* base = donor->GetActorBase()) {
                     _donorVoiceType = GetNPCVoiceType(base);
                 } else {
@@ -1313,6 +1518,13 @@ namespace AlternateActors {
 
     void ImpersonationManager::OnPostLoadGame() {
         if (_active.load(std::memory_order_relaxed)) {
+            if (_origPlayerName.empty()) {
+                if (FaceManager::GetSingleton().HasSavedAppearance() &&
+                    !FaceManager::GetSingleton().GetSavedAppearance().fullName.empty()) {
+                    _origPlayerName = FaceManager::GetSingleton().GetSavedAppearance().fullName.c_str();
+                }
+            }
+
             auto* donor = _donorActor.load(std::memory_order_relaxed);
             auto* player = _playerActor.load(std::memory_order_relaxed);
             if (donor && player) {
@@ -1335,9 +1547,13 @@ namespace AlternateActors {
 
                 auto* task = SKSE::GetTaskInterface();
                 if (task) {
-                    task->AddTask([donor, player]() {
-                        if (donor && player) {
-                            FaceManager::GetSingleton().RestoreDonorAppearance(donor, player);
+                    auto donorHandle = donor->GetHandle();
+                    auto playerHandle = player->GetHandle();
+                    task->AddTask([donorHandle, playerHandle]() {
+                        auto d = donorHandle.get();
+                        auto p = playerHandle.get();
+                        if (d && p) {
+                            FaceManager::GetSingleton().RestoreDonorAppearance(d.get(), p.get());
                         }
                     });
                 }

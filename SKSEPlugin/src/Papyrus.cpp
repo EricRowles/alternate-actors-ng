@@ -39,6 +39,14 @@ namespace AlternateActors::Papyrus {
         return FactionManager::GetSingleton().RestoreFactionsFromPlayer(a_player);
     }
 
+    bool CopyFactions(RE::StaticFunctionTag*, RE::Actor* a_fromActor, RE::Actor* a_toActor) {
+        if (!a_fromActor || !a_toActor) return false;
+        auto factions = FactionManager::GetSingleton().GetActorFactions(a_fromActor);
+        auto* crimeFaction = a_fromActor->GetCrimeFaction();
+        FactionManager::GetSingleton().SetActorFactions(a_toActor, factions, crimeFaction);
+        return true;
+    }
+
     bool TransferStats(RE::StaticFunctionTag*, RE::Actor* a_donor, RE::Actor* a_player) {
         return StatManager::GetSingleton().TransferStatsToPlayer(a_player, a_donor);
     }
@@ -64,6 +72,9 @@ namespace AlternateActors::Papyrus {
         if (!a_player) return false;
         if (a_donor) {
             StatManager::GetSingleton().CopyStats(a_player, a_donor);
+            auto currentFactions = FactionManager::GetSingleton().GetActorFactions(a_player);
+            auto* crimeFaction = a_player->GetCrimeFaction();
+            FactionManager::GetSingleton().SetActorFactions(a_donor, currentFactions, crimeFaction);
         }
         FaceManager::GetSingleton().RevertAppearance(a_player);
         StatManager::GetSingleton().RestoreStatsFromPlayer(a_player);
@@ -166,6 +177,7 @@ namespace AlternateActors::Papyrus {
         a_vm->RegisterFunction("RestoreInventoryFromPlayer", className, RestoreInventoryFromPlayer);
         a_vm->RegisterFunction("TransferFactions", className, TransferFactions);
         a_vm->RegisterFunction("RestoreFactions", className, RestoreFactions);
+        a_vm->RegisterFunction("CopyFactions", className, CopyFactions);
         a_vm->RegisterFunction("TransferStats", className, TransferStats);
         a_vm->RegisterFunction("CopyStats", className, CopyStats);
         a_vm->RegisterFunction("RestoreStats", className, RestoreStats);

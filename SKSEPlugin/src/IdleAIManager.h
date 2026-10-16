@@ -88,6 +88,7 @@ namespace AlternateActors {
             _isCombatAIActive = false;
             _lastCell = nullptr;
             _currentIdleDialogueItem.reset();
+            _lastIdleEvalTime = {};
         }
 
     private:
@@ -118,6 +119,7 @@ namespace AlternateActors {
         std::chrono::steady_clock::time_point _bowDrawTime{ std::chrono::steady_clock::now() };
         std::chrono::steady_clock::time_point _lastInputTime{ std::chrono::steady_clock::now() };
         std::chrono::steady_clock::time_point _lastIdleChatterTime{ std::chrono::steady_clock::now() };
+        std::chrono::steady_clock::time_point _lastIdleEvalTime{};
         RE::TESObjectCELL* _lastCell{ nullptr };
         RE::BSTSmartPointer<RE::DialogueItem> _currentIdleDialogueItem;
         bool _savedUserRunning{ true };

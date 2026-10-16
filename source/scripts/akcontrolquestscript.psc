@@ -37,7 +37,11 @@ function akmaintenance()
 		PlayerRef.AddSpell(akcontrolmorphspell, false)
 	EndIf
 
-	If OriginalDonorRef && PlayerRef.HasSpell(akcontrolrevertspell)
+	If OriginalDonorRef
+		If !PlayerRef.HasSpell(akcontrolrevertspell)
+			PlayerRef.AddSpell(akcontrolrevertspell, false)
+		EndIf
+	ElseIf PlayerRef.HasSpell(akcontrolrevertspell)
 		PlayerRef.RemoveSpell(akcontrolrevertspell)
 	EndIf
 
@@ -87,16 +91,18 @@ function AKMorphComplete(Actor akdonor, Actor akimposter)
 		currentPuppet = Alias_PlayerPuppet.GetActorReference()
 	EndIf
 	PlayerPuppetRef = currentPuppet
-	AK_NG.SetPuppetActor(PlayerPuppetRef)
 
 	; Transfer traits from PC back to orignpc before getting new traits if we were already controlling an NPC
 	OriginalDonorRef = Alias_OriginalDonor.GetActorReference()
 	If OriginalDonorRef
 		AK_NG.EndImpersonation()
 		OriginalDonorRef.moveto(akdonor)
+		OriginalDonorRef.StopCombat()
 		Utility.Wait(0.1)
+		AK_NG.CopyFactions(PlayerRef, OriginalDonorRef)
 		AK_NG.RestoreInventoryFromPlayer(PlayerRef, OriginalDonorRef, None)
 		AK_NG.CopyStats(PlayerRef, OriginalDonorRef)
+		OriginalDonorRef.EvaluatePackage()
 	Else
 		PlayerPuppetRef.moveto(akdonor)
 		Utility.Wait(0.1) ; Allow 3D node attachment in loaded cell before copying appearance
@@ -118,7 +124,9 @@ function AKMorphComplete(Actor akdonor, Actor akimposter)
 	PlayerPuppetRef.BlockActivation(True)
 	AK_NG.SetPuppetActor(PlayerPuppetRef)
 	
-	PlayerRef.addspell(akcontrolrevertspell, False) 
+	If !PlayerRef.HasSpell(akcontrolrevertspell)
+		PlayerRef.addspell(akcontrolrevertspell, False)
+	EndIf 
 	
 	AK_NG.SetControllingNPC(True)
 	AK_NG.BeginImpersonation(akdonor, PlayerRef)

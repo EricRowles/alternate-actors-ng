@@ -200,7 +200,12 @@ namespace AlternateActors {
             targetNPC->actorData.actorBaseFlags.reset(RE::ACTOR_BASE_DATA::Flag::kFemale);
         }
 
-        targetNPC->voiceType = a_snapshot.voiceType;
+        if (isPuppet || base->GetFormID() == 0x00000D93 || base->GetFormID() == 0x00000D94 ||
+            (base->GetFormID() & 0x00FFFFFF) == 0x00000D93 || (base->GetFormID() & 0x00FFFFFF) == 0x00000D94) {
+            targetNPC->voiceType = nullptr;
+        } else {
+            targetNPC->voiceType = a_snapshot.voiceType;
+        }
 
         // 3. Body scales & tint
         targetNPC->height = a_snapshot.height;
@@ -331,6 +336,9 @@ namespace AlternateActors {
         // When applying to player, alias packages from the donor's quests must evaluate BEFORE base NPC packages
         if (a_targetActor && a_targetActor->IsPlayerRef()) {
             auto* donorActor = IdleAIManager::GetSingleton().GetActiveDonorActor();
+            if (!donorActor) {
+                donorActor = ImpersonationManager::GetSingleton().GetDonor();
+            }
             if (donorActor) {
                 auto aliasPkgs = AliasManager::GetSingleton().GetAliasPackages(donorActor);
                 for (auto it = aliasPkgs.rbegin(); it != aliasPkgs.rend(); ++it) {

@@ -152,20 +152,17 @@ namespace AlternateActors {
 
         if (a_event->menuName == "Dialogue Menu"sv) {
             if (!a_event->opening) {
+                _inSelfDialogue = false;
                 auto* topicMgr = RE::MenuTopicManager::GetSingleton();
                 auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
-                auto* donor = ImpersonationManager::GetSingleton().GetDonor();
-                bool topicActive = false;
-                if (topicMgr) {
-                    if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
-                        topicActive = true;
+                if (topicMgr && puppet) {
+                    auto puppetHandle = puppet->GetHandle();
+                    if (topicMgr->speaker == puppetHandle) {
+                        topicMgr->speaker.reset();
                     }
-                    if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
-                        topicActive = true;
+                    if (topicMgr->lastSpeaker == puppetHandle) {
+                        topicMgr->lastSpeaker.reset();
                     }
-                }
-                if (!ImpersonationManager::GetSingleton().IsPlayerSpeaking() && !topicActive) {
-                    _inSelfDialogue = false;
                 }
             }
         }
@@ -430,21 +427,44 @@ namespace AlternateActors {
     }
 
     bool IdleAIManager::IsInSelfDialogue() const {
+        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        if (topicMgr && (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress)) {
+            return false;
+        }
+
         if (_inSelfDialogue) {
             return true;
+        }
+
+        auto* ui = RE::UI::GetSingleton();
+        bool menuOpen = (ui && ui->IsMenuOpen("Dialogue Menu"sv)) || (topicMgr && (topicMgr->menuOpen || topicMgr->isGreetingPlayer));
+        if (!menuOpen && !ImpersonationManager::GetSingleton().IsPlayerSpeaking()) {
+            return false;
         }
 
         auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
         auto* donor = ImpersonationManager::GetSingleton().GetDonor();
         if (!puppet && !donor) return false;
 
-        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
         if (topicMgr) {
-            if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
-                return true;
+            // If Dialogue Menu is open, check if puppet or donor is the active speaker
+            if (menuOpen) {
+                if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
+                    return true;
+                }
+                if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
+                    return true;
+                }
             }
-            if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
-                return true;
+
+            // If player is actively speaking, speaker or lastSpeaker is valid
+            if (ImpersonationManager::GetSingleton().IsPlayerSpeaking()) {
+                if (puppet && (topicMgr->speaker == puppet->GetHandle() || topicMgr->lastSpeaker == puppet->GetHandle())) {
+                    return true;
+                }
+                if (donor && (topicMgr->speaker == donor->GetHandle() || topicMgr->lastSpeaker == donor->GetHandle())) {
+                    return true;
+                }
             }
         }
 
@@ -553,8 +573,22 @@ namespace AlternateActors {
             return false;
         }
 
+        // Throttle quest & condition polling to once every 1.5 seconds when out of cooldown
+        float evalElapsed = std::chrono::duration<float>(now - _lastIdleEvalTime).count();
+        constexpr float kIdleEvalInterval = 1.5f;
+        if (evalElapsed < kIdleEvalInterval) {
+            return false;
+        }
+        _lastIdleEvalTime = now;
+
         auto* dataHandler = RE::TESDataHandler::GetSingleton();
         if (!dataHandler) return false;
+
+        static auto lastDiagnosticLogTime = std::chrono::steady_clock::now();
+        bool doDiagnosticLog = std::chrono::duration<float>(now - lastDiagnosticLogTime).count() >= 15.0f;
+        if (doDiagnosticLog) {
+            lastDiagnosticLogTime = now;
+        }
 
         struct Candidate {
             RE::TESQuest* quest{ nullptr };
@@ -573,7 +607,12 @@ namespace AlternateActors {
             }
 
             // Check quest dialogue conditions safely
-            if (quest->objConditions.head && !SafeConditionCheck(&quest->objConditions, player, targetRef)) {
+            bool objCondPassed = !quest->objConditions.head || SafeConditionCheck(&quest->objConditions, player, targetRef);
+            if (doDiagnosticLog) {
+                SKSE::log::info("CheckAndTriggerIdleDialogue: Quest {:08X} ('{}') relatesToDonor=true, objConditions={}",
+                    quest->GetFormID(), quest->GetName(), objCondPassed);
+            }
+            if (!objCondPassed) {
                 continue;
             }
 
@@ -615,7 +654,6 @@ namespace AlternateActors {
         }
 
         if (candidates.empty()) {
-            _lastIdleChatterTime = now;
             return false;
         }
 
@@ -644,7 +682,6 @@ namespace AlternateActors {
             }
         }
 
-        _lastIdleChatterTime = now;
         return false;
     }
 

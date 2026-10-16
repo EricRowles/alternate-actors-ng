@@ -205,20 +205,35 @@ namespace AlternateActors {
         std::vector<RE::TESPackage*> result;
         if (!a_actor) return result;
 
-        auto* aliasArray = a_actor->extraList.GetByType<RE::ExtraAliasInstanceArray>();
-        if (!aliasArray) return result;
-
         struct AliasPkgEntry {
             std::int8_t questPriority;
             RE::TESPackage* pkg;
         };
         std::vector<AliasPkgEntry> entries;
 
-        {
+        auto collectFromActor = [&](RE::Actor* actor, bool checkSwappedOnly) {
+            if (!actor) return;
+            auto* aliasArray = actor->extraList.GetByType<RE::ExtraAliasInstanceArray>();
+            if (!aliasArray) return;
+
             RE::BSReadLockGuard locker(aliasArray->lock);
             for (auto* inst : aliasArray->aliases) {
                 if (!inst || !inst->quest || !inst->instancedPackages) continue;
                 if (!inst->quest->IsRunning()) continue;
+
+                if (checkSwappedOnly) {
+                    if (!inst->alias) continue;
+                    bool isSwappedForActor = false;
+                    for (const auto& rec : _swappedRecords) {
+                        if (rec.originalActorFormID == a_actor->GetFormID() &&
+                            rec.questFormID == inst->quest->GetFormID() &&
+                            rec.aliasID == inst->alias->aliasID) {
+                            isSwappedForActor = true;
+                            break;
+                        }
+                    }
+                    if (!isSwappedForActor) continue;
+                }
 
                 std::int8_t priority = inst->quest->data.priority;
                 for (auto* pkg : *inst->instancedPackages) {
@@ -226,6 +241,17 @@ namespace AlternateActors {
                         entries.push_back({ priority, pkg });
                     }
                 }
+            }
+        };
+
+        // 1. Direct aliases currently residing on the actor
+        collectFromActor(a_actor, false);
+
+        // 2. If a_actor had aliases swapped away to player, collect those from player
+        if (!_swappedRecords.empty()) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player && player != a_actor) {
+                collectFromActor(player, true);
             }
         }
 

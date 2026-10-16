@@ -26,6 +26,7 @@ namespace AlternateActors {
 
     struct PackageRetargetRecord {
         RE::TESPackage* package{ nullptr };
+        RE::FormID packageFormID{ 0 };
         PackageRetargetType type{ PackageRetargetType::kPackLocHandle };
         void* targetPtr{ nullptr };
         RE::ObjectRefHandle origHandle;

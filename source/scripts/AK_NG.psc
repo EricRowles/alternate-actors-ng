@@ -27,6 +27,9 @@ Bool Function TransferFactions(Actor akDonor, Actor akPlayer) Global Native
 ; Restores akPlayer's original factions and crime faction.
 Bool Function RestoreFactions(Actor akPlayer) Global Native
 
+; Copies all base and dynamic factions (ranks and crime faction) from akFrom to akTo without modifying saved player factions.
+Bool Function CopyFactions(Actor akFrom, Actor akTo) Global Native
+
 ; Copies all base stats (Health, Magicka, Stamina) and 18 skills from akDonor to akPlayer,
 ; saving akPlayer's original stats for restoration.
 Bool Function TransferStats(Actor akDonor, Actor akPlayer) Global Native
