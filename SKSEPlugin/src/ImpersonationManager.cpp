@@ -280,7 +280,7 @@ namespace AlternateActors {
                 bool isPuppet = (puppet && a_this == puppet->GetActorBase()) || mgr.IsPuppetBase(a_this);
                 if (isPuppet) {
                     auto* topicMgr = RE::MenuTopicManager::GetSingleton();
-                    if (topicMgr && (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress)) {
+                    if (topicMgr && topicMgr->forceGoodbye) {
                         return nullptr;
                     }
                     return donorVoice;
@@ -341,21 +341,46 @@ namespace AlternateActors {
             _speechAudioEndTime = std::chrono::steady_clock::time_point{};
         }
 
+        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+        auto* dial = topicMgr ? topicMgr->lastSelectedDialogue : nullptr;
+        bool hasNextResponse = (dial && dial->currentResponse && dial->currentResponse->next);
+
         if (a_player) {
+            // Stop any remaining sound handles on player
+            auto* process = a_player->GetActorRuntimeData().currentProcess;
+            if (process && process->high) {
+                for (auto& handle : process->high->soundHandles) {
+                    if (handle.IsValid() && handle.IsPlaying()) {
+                        handle.Stop();
+                    }
+                }
+            }
+
+            // Set kSoundFileDone and kVoiceFileDone so Character::UpdateInDialogue
+            // at 0x68CF34 will load and play voice audio on the next line!
             a_player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
+            a_player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSoundFileDone);
+            a_player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kVoiceFileDone);
+            a_player->GetActorRuntimeData().voiceTimer = 0.0f;
             _origPlayerSetSpeakingDone(a_player, true);
             if (auto* faceData = a_player->GetFaceGenAnimationData()) {
                 RE::BSSpinLockGuard locker(faceData->lock);
                 faceData->Reset(0.0f, false, true, false, false);
                 faceData->ClearExpressionOverride();
             }
+            // Clear current emotion and reset face
             a_player->SetEmotionType(RE::EmotionType::kNeutral);
             a_player->SetEmotionValue(0);
         }
 
         auto* puppet = GetPuppet();
         if (puppet) {
+            // Set kSoundFileDone and kVoiceFileDone on puppet so Actor::IsCurrentlySpeaking (0x1406754B0)
+            // returns false when the user clicks a dialogue option in DialogueMenu!
             puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
+            puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSoundFileDone);
+            puppet->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kVoiceFileDone);
+            puppet->GetActorRuntimeData().voiceTimer = 0.0f;
             puppet->SetEmotionType(RE::EmotionType::kNeutral);
             puppet->SetEmotionValue(0);
             if (auto* spkFace = puppet->GetFaceGenAnimationData()) {
@@ -363,28 +388,61 @@ namespace AlternateActors {
                 spkFace->Reset(0.0f, false, true, false, false);
                 spkFace->ClearExpressionOverride();
             }
+            _origCharSetSpeakingDone(puppet, true);
         }
 
         auto* donor = GetDonor();
         if (donor) {
             donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
+            donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSoundFileDone);
+            donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kVoiceFileDone);
+            donor->GetActorRuntimeData().voiceTimer = 0.0f;
             _origCharSetSpeakingDone(donor, true);
         }
 
         // Advance MenuTopicManager
-        auto* ui = RE::UI::GetSingleton();
-        auto* topicMgr = RE::MenuTopicManager::GetSingleton();
         if (topicMgr) {
-            SKSE::log::info("CompleteSpeaking: signaling MenuTopicManager to advance (waitingToAdvance: {}, isGreeting: {})",
-                topicMgr->waitingToAdvance, topicMgr->isGreetingPlayer);
-            topicMgr->canSkip = true;
-            topicMgr->advanceRequested = true;
+            bool wasGreeting = topicMgr->isGreetingPlayer;
+            topicMgr->isGreetingPlayer = false;
+
             if (puppet) {
                 topicMgr->lastSpeaker = puppet->GetHandle();
             }
+
+            if (dial) {
+                if (hasNextResponse) {
+                    // Multi-line topic response: advance to the next response in the chain
+                    // and set advanceRequested = true so MenuTopicManager::Update calls AdvanceDialogue (0x1405EFE90)
+                    dial->currentResponse = dial->currentResponse->next;
+                    topicMgr->waitingToAdvance = true;
+                    topicMgr->canSkip = true;
+                    topicMgr->advanceRequested = true;
+                    SKSE::log::info("CompleteSpeaking: advancing multi-line topic to next response (item: {:p})",
+                        (void*)dial->currentResponse->item);
+                } else {
+                    // Final response in topic: do NOT wipe currentTopicInfo!
+                    // MenuTopicManager::FinishResponseOrRunPapyrus (0x1405EFDF0) and EndDialogue (0x1405F0AD0)
+                    // check currentTopicInfo to execute the End Papyrus script fragment (e.g. recruitment, quest stage).
+                    // We advance currentResponse to nullptr and trigger advanceRequested so MenuTopicManager
+                    // natively runs the End fragment and rebuilds the dialogue list.
+                    dial->currentResponse = nullptr;
+                    topicMgr->waitingToAdvance = true;
+                    topicMgr->canSkip = true;
+                    topicMgr->advanceRequested = true;
+                    SKSE::log::info("CompleteSpeaking: topic finished, advancing to run End Papyrus fragment and return to menu");
+                }
+            } else {
+                // Greeting line finished (no dial chain): preserve currentTopicInfo if present for greeting end fragments
+                topicMgr->waitingToAdvance = true;
+                topicMgr->canSkip = true;
+                topicMgr->advanceRequested = true;
+                SKSE::log::info("CompleteSpeaking: greeting line finished (wasGreeting: {})", wasGreeting);
+            }
         }
 
-        IdleAIManager::GetSingleton().ClearCurrentDialogueItem();
+        if (!hasNextResponse) {
+            IdleAIManager::GetSingleton().ClearCurrentDialogueItem();
+        }
 
         _inCompleteSpeaking.store(false);
     }
@@ -546,6 +604,56 @@ namespace AlternateActors {
                 }
             }
 
+            // Retarget any donor package targeting Player (0x14 / 0x07) to Puppet so force-greet packages walk to Puppet
+            if (auto* puppet = GetPuppet()) {
+                auto playerHandle = player->GetHandle();
+                auto puppetHandle = puppet->GetHandle();
+                RE::TESForm* playerBaseForm = player->GetBaseObject();
+
+                for (auto* pkg : donorPkgs) {
+                    if (!pkg || !pkg->packTarg) continue;
+
+                    bool alreadyTracked = false;
+                    for (const auto& entry : _retargetedPackages) {
+                        if (entry.package == pkg) {
+                            alreadyTracked = true;
+                            break;
+                        }
+                    }
+
+                    std::uint8_t tType = static_cast<std::uint8_t>(pkg->packTarg->targType);
+                    if (tType == 0) {
+                        if (pkg->packTarg->target.handle == playerHandle) {
+                            if (!alreadyTracked) {
+                                RetargetedPackageTarget rec;
+                                rec.package = pkg;
+                                rec.packageFormID = pkg->GetFormID();
+                                rec.targType = tType;
+                                rec.origHandle = pkg->packTarg->target.handle;
+                                _retargetedPackages.push_back(rec);
+                            }
+                            pkg->packTarg->target.handle = puppetHandle;
+                            SKSE::log::info("SyncDonorUpdatesToPlayer: Retargeted package {:08X} handle target from Player to Puppet {:08X}",
+                                pkg->GetFormID(), puppet->GetFormID());
+                        }
+                    } else if (tType == 1) {
+                        if (pkg->packTarg->target.object == player || pkg->packTarg->target.object == playerBaseForm) {
+                            if (!alreadyTracked) {
+                                RetargetedPackageTarget rec;
+                                rec.package = pkg;
+                                rec.packageFormID = pkg->GetFormID();
+                                rec.targType = tType;
+                                rec.origObject = pkg->packTarg->target.object;
+                                _retargetedPackages.push_back(rec);
+                            }
+                            pkg->packTarg->target.object = puppet;
+                            SKSE::log::info("SyncDonorUpdatesToPlayer: Retargeted package {:08X} object target from Player to Puppet {:08X}",
+                                pkg->GetFormID(), puppet->GetFormID());
+                        }
+                    }
+                }
+            }
+
             std::vector<RE::TESPackage*> playerPkgs;
             for (auto* pkg : playerBase->aiPackages.packages) {
                 if (pkg) {
@@ -591,7 +699,7 @@ namespace AlternateActors {
             // Suppress automatic puppet NPC goodbye farewell blurbs
             bool isGoodbye = false;
             if (topicMgr) {
-                if (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress) {
+                if (topicMgr->forceGoodbye) {
                     isGoodbye = true;
                 }
                 auto checkSubtypeGoodbye = [](RE::TESTopicInfo* info) -> bool {
@@ -599,7 +707,7 @@ namespace AlternateActors {
                     auto st = info->parentTopic->data.subtype.get();
                     return (st == RE::DIALOGUE_DATA::Subtype::kGoodBye || st == RE::DIALOGUE_DATA::Subtype::kTimeToGo);
                 };
-                if (checkSubtypeGoodbye(topicMgr->currentTopicInfo) || checkSubtypeGoodbye(topicMgr->lastTopicInfo)) {
+                if (checkSubtypeGoodbye(topicMgr->currentTopicInfo)) {
                     isGoodbye = true;
                 }
             }
@@ -618,6 +726,22 @@ namespace AlternateActors {
                     a_response->text.c_str(),
                     a_response->voice.c_str(),
                     a_response->voiceSound ? static_cast<std::uint32_t>(a_response->voiceSound->GetFormID()) : 0);
+
+                // Stop any previous sound handles still playing on player
+                auto* playerProcess = player->GetActorRuntimeData().currentProcess;
+                if (playerProcess && playerProcess->high) {
+                    for (auto& handle : playerProcess->high->soundHandles) {
+                        if (handle.IsValid() && handle.IsPlaying()) {
+                            handle.Stop();
+                        }
+                    }
+                }
+
+                // Reset advanceRequested on topicMgr so new line is not prematurely skipped
+                if (topicMgr) {
+                    topicMgr->advanceRequested = false;
+                    topicMgr->lineSkipped = false;
+                }
 
                 // 1. Prepare player response clone with sensory data (sound, lip, emotion, idle)
                 RE::DialogueResponse playerResp;
@@ -644,28 +768,25 @@ namespace AlternateActors {
                 puppetResp.useEmotion = false;
                 puppetResp.soundLip = false;
 
-                // 3. Clear speaking-done flags on both player and speaker so the engine treats this response as fresh
+                // 3. Ensure player boolBits have kSoundFileDone and kVoiceFileDone set, kSpeakingDone cleared,
+                // so Character::UpdateInDialogue takes the new-speech branch
+                player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSoundFileDone);
+                player->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kVoiceFileDone);
                 player->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSpeakingDone);
+                player->GetActorRuntimeData().voiceTimer = 0.0f;
                 _origPlayerSetSpeakingDone(player, false);
+
+                // 4. Ensure puppet has speakingDone cleared, and voiceDone/soundDone cleared so it stays silent
                 a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSpeakingDone);
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSoundFileDone);
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kVoiceFileDone);
+                a_speaker->GetActorRuntimeData().voiceTimer = 0.0f;
                 _origCharSetSpeakingDone(a_speaker, false);
 
-                // If there is a next response in this topic, advance currentResponse and inform MenuTopicManager
-                if (topicMgr && topicMgr->lastSelectedDialogue && topicMgr->lastSelectedDialogue->currentResponse) {
-                    if (topicMgr->lastSelectedDialogue->currentResponse->next != nullptr) {
-                        topicMgr->waitingToAdvance = true;
-                        topicMgr->lastSelectedDialogue->currentResponse = topicMgr->lastSelectedDialogue->currentResponse->next;
-                        SKSE::log::info("Multi-line topic detected - advanced currentResponse to next line and set waitingToAdvance = true");
-                    } else {
-                        topicMgr->waitingToAdvance = false;
-                        topicMgr->lastSelectedDialogue->currentResponse = nullptr;
-                    }
-                }
-
-                // 4. Start speech tracking for player duration / audio completion
+                // 5. Start speech tracking for player duration / audio completion
                 OnDialogueResponseStarted(&playerResp);
 
-                // 5. Explicitly queue or force subtitle display associated with the PLAYER
+                // 6. Explicitly queue or force subtitle display associated with the PLAYER
                 if (!a_response->text.empty()) {
                     if (auto* subMgr = RE::SubtitleManager::GetSingleton()) {
                         RE::BSSpinLockGuard locker(subMgr->lock);
@@ -690,7 +811,7 @@ namespace AlternateActors {
                     }
                 }
 
-                // 4. Dispatch sensory playback directly onto PlayerCharacter natively!
+                // 7. Dispatch sensory playback directly onto PlayerCharacter natively!
                 if (playerResp.useEmotion) {
                     player->SetEmotionType(playerResp.animFaceArchType.get());
                     player->SetEmotionValue(playerResp.percent);
@@ -698,10 +819,20 @@ namespace AlternateActors {
                 _origCharUpdateInDialogue(player, &playerResp, a_unused);
                 AttachSoundHandlesToHead(player);
 
-                // 5. Dispatch silent logical response to puppet (updates MenuTopicManager and subtitle display)
+                // Set player offset 0x278 = 1 so Character::UpdateSoundCallBack (0x14068E150) treats
+                // player voice completion as an external dialogue line rather than mode 2 (MenuTopicManager),
+                // preventing UpdateSoundCallBack from racing CompleteSpeaking and prematurely advancing MenuTopicManager.
+                *reinterpret_cast<std::uint8_t*>(reinterpret_cast<char*>(player) + 0x278) = 1;
+
+                // 8. Dispatch silent logical response to puppet (updates MenuTopicManager and subtitle display)
                 bool ret = _origCharUpdateInDialogue(a_speaker, &puppetResp, a_unused);
 
-                // 6. Ensure puppet face and emotion remain strictly neutral
+                // Ensure puppet kSoundFileDone and kVoiceFileDone remain cleared while player is speaking
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSpeakingDone);
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSoundFileDone);
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kVoiceFileDone);
+
+                // 9. Ensure puppet face and emotion remain strictly neutral
                 if (auto* spkFace = a_speaker->GetFaceGenAnimationData()) {
                     RE::BSSpinLockGuard locker(spkFace->lock);
                     spkFace->ClearExpressionOverride();
@@ -709,9 +840,6 @@ namespace AlternateActors {
                 }
                 a_speaker->SetEmotionType(RE::EmotionType::kNeutral);
                 a_speaker->SetEmotionValue(0);
-
-                // 7. Sync donor updates to player
-                SyncDonorUpdatesToPlayer();
 
                 return ret;
             } else {
@@ -721,11 +849,37 @@ namespace AlternateActors {
             }
         } else {
             // Ticks with a_response == nullptr from MenuTopicManager during dialogue:
-            // 1. Keep player's dialogue state and audio emitter updated
             if (_playerSpeaking.load(std::memory_order_relaxed)) {
+                // While player is speaking, keep puppet's kVoiceFileDone and kSoundFileDone reset to 0
+                // so Actor::IsCurrentlySpeaking (0x1406754B0) returns true and 0x14068D2AA does not
+                // prematurely advance lastSelectedDialogue before CompleteSpeaking runs.
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSoundFileDone);
+                a_speaker->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kVoiceFileDone);
+
+                // 1. Keep player's dialogue state and audio emitter updated
                 _origCharUpdateInDialogue(player, nullptr, a_unused);
                 AttachSoundHandlesToHead(player);
+            } else {
+                // When player is NOT speaking (waiting for user to select a dialogue option),
+                // kSoundFileDone and kVoiceFileDone MUST remain SET (1) on puppet so
+                // Actor::IsCurrentlySpeaking (0x1406754B0) returns false when the user clicks a topic
+                // in MenuTopicManager::PlaySelectedTopic (0x1405EFB90)!
+                a_speaker->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSpeakingDone);
+                a_speaker->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSoundFileDone);
+                a_speaker->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kVoiceFileDone);
+                a_speaker->GetActorRuntimeData().voiceTimer = 0.0f;
+
+                // Keep high->voiceTimer positive while DialogueMenu is open so 0x14068D3E4 does not
+                // prematurely call MenuTopicManager::EndDialogue (0x1405F0AD0) while browsing topics.
+                auto* ui = RE::UI::GetSingleton();
+                auto* topicMgr = RE::MenuTopicManager::GetSingleton();
+                if ((ui && ui->IsMenuOpen("Dialogue Menu"sv)) || (topicMgr && topicMgr->menuOpen)) {
+                    if (auto* spkProcess = a_speaker->GetActorRuntimeData().currentProcess; spkProcess && spkProcess->high) {
+                        spkProcess->high->voiceTimer = 10.0f;
+                    }
+                }
             }
+
             // 2. Allow puppet to tick native UpdateInDialogue so MenuTopicManager stays synchronized
             return _origCharUpdateInDialogue(a_speaker, nullptr, a_unused);
         }
@@ -781,6 +935,12 @@ namespace AlternateActors {
                         }
                     }
                 }
+
+                // Ensure player boolBits allow Character::UpdateInDialogue to play audio and phonemes
+                a_this->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kSoundFileDone);
+                a_this->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kVoiceFileDone);
+                a_this->GetActorRuntimeData().boolBits.reset(RE::Actor::BOOL_BITS::kSpeakingDone);
+                a_this->GetActorRuntimeData().voiceTimer = 0.0f;
 
                 mgr.OnDialogueResponseStarted(a_response);
                 bool ret = _origCharUpdateInDialogue(a_this, a_response, a_unused);
@@ -895,9 +1055,19 @@ namespace AlternateActors {
                                         donor->AddToFaction(fRank.faction, fRank.rank);
                                         SKSE::log::info("Hook_SetDialogueWithPlayer: Forwarded faction {:08X} rank {} from puppet to donor.",
                                             fRank.faction->GetFormID(), fRank.rank);
+
+                                        // If recruited into follower or teammate faction, ensure donor has kPlayerTeammate set
+                                        if (fRank.rank >= 0) {
+                                            auto fid = fRank.faction->GetFormID();
+                                            if (fid == 0x0005C84E /*CurrentFollowerFaction*/ || fid == 0x000BD738 /*PlayerFollowerFaction*/) {
+                                                donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+                                                SKSE::log::info("Hook_SetDialogueWithPlayer: Set kPlayerTeammate on donor {:08X} due to faction {:08X}",
+                                                    donor->GetFormID(), fid);
+                                            }
+                                        }
                                     }
                                 }
-                                puppet->extraList.Remove(RE::ExtraDataType::kFactionChanges, extraFaction);
+                                extraFaction->factionChanges.clear();
                             }
                         }
 
@@ -976,7 +1146,13 @@ namespace AlternateActors {
                         static_cast<std::uint32_t>(targetRef->GetFormID()),
                         static_cast<std::uint32_t>(donor->GetFormID()));
 
-                    auto* alias = (aliasID < quest->aliases.size()) ? quest->aliases[aliasID] : nullptr;
+                    RE::BGSBaseAlias* alias = nullptr;
+                    for (auto* a : quest->aliases) {
+                        if (a && a->aliasID == aliasID) {
+                            alias = a;
+                            break;
+                        }
+                    }
                     if (alias) {
                         std::string aliasName = alias->aliasName.c_str();
                         std::transform(aliasName.begin(), aliasName.end(), aliasName.begin(), ::tolower);
@@ -1343,6 +1519,33 @@ namespace AlternateActors {
             }
         }
 
+        // Forward any latent faction changes from puppet to donor (e.g. from End Papyrus fragments)
+        if (_active.load(std::memory_order_acquire)) {
+            if (auto* puppet = GetPuppet()) {
+                if (auto* donor = GetDonor()) {
+                    auto* extraFaction = puppet->extraList.GetByType<RE::ExtraFactionChanges>();
+                    if (extraFaction && !extraFaction->factionChanges.empty()) {
+                        for (const auto& fRank : extraFaction->factionChanges) {
+                            if (fRank.faction) {
+                                donor->AddToFaction(fRank.faction, fRank.rank);
+                                SKSE::log::info("Tick: Forwarded latent faction {:08X} rank {} from puppet to donor.",
+                                    fRank.faction->GetFormID(), fRank.rank);
+                                if (fRank.rank >= 0) {
+                                    auto fid = fRank.faction->GetFormID();
+                                    if (fid == 0x0005C84E || fid == 0x000BD738) {
+                                        donor->GetActorRuntimeData().boolBits.set(RE::Actor::BOOL_BITS::kPlayerTeammate);
+                                        SKSE::log::info("Tick: Set kPlayerTeammate on donor {:08X} due to faction {:08X}",
+                                            donor->GetFormID(), fid);
+                                    }
+                                }
+                            }
+                        }
+                        extraFaction->factionChanges.clear();
+                    }
+                }
+            }
+        }
+
         // Donor holding-cell leash
         if (_active.load(std::memory_order_acquire)) {
             auto* donor = GetDonor();
@@ -1388,6 +1591,22 @@ namespace AlternateActors {
 
     void ImpersonationManager::ClearPlayerPackages() {
         std::lock_guard<std::recursive_mutex> lock(_mutex);
+        for (const auto& entry : _retargetedPackages) {
+            RE::TESPackage* pkg = entry.package;
+            if (!pkg && entry.packageFormID != 0) {
+                pkg = RE::TESForm::LookupByID<RE::TESPackage>(entry.packageFormID);
+            }
+            if (pkg && pkg->packTarg) {
+                if (entry.targType == 0) {
+                    pkg->packTarg->target.handle = entry.origHandle;
+                } else if (entry.targType == 1) {
+                    pkg->packTarg->target.object = entry.origObject;
+                }
+                SKSE::log::info("ClearPlayerPackages: Restored original target on package {:08X}", pkg->GetFormID());
+            }
+        }
+        _retargetedPackages.clear();
+
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return;
         auto* playerBase = skyrim_cast<RE::TESNPC*>(player->GetActorBase());

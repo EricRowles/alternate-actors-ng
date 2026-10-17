@@ -13,8 +13,13 @@ namespace AlternateActors {
         bool puppetFollowsPlayer{ true };
     };
 
-
-
+    struct RetargetedPackageTarget {
+        RE::TESPackage* package{ nullptr };
+        RE::FormID packageFormID{ 0 };
+        std::uint8_t targType{ 0 };
+        RE::ObjectRefHandle origHandle;
+        RE::TESForm* origObject{ nullptr };
+    };
 
     class ImpersonationManager {
     public:
@@ -188,6 +193,7 @@ namespace AlternateActors {
         std::uint32_t _dialogueSoundID{ static_cast<std::uint32_t>(-1) };
 
         ImpersonationOptions _options;
+        std::vector<RetargetedPackageTarget> _retargetedPackages;
         bool _hooksInstalled{ false };
     };
 

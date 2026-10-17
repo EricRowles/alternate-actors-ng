@@ -204,28 +204,36 @@ namespace AlternateActors {
 
         if (a_event->menuName == "Dialogue Menu"sv) {
             if (!a_event->opening) {
-                _inSelfDialogue.store(false, std::memory_order_release);
-                auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
-                auto* donor = ImpersonationManager::GetSingleton().GetDonor();
-                if (puppet && donor) {
-                    auto* extraFaction = puppet->extraList.GetByType<RE::ExtraFactionChanges>();
-                    if (extraFaction) {
-                        for (const auto& fRank : extraFaction->factionChanges) {
-                            if (fRank.faction) {
-                                donor->AddToFaction(fRank.faction, fRank.rank);
-                            }
-                        }
-                        extraFaction->factionChanges.clear();
-                    }
-                }
                 auto* topicMgr = RE::MenuTopicManager::GetSingleton();
-                if (topicMgr && puppet) {
-                    auto puppetHandle = puppet->GetHandle();
-                    if (topicMgr->speaker == puppetHandle) {
-                        topicMgr->speaker.reset();
+                bool isSpeaking = ImpersonationManager::GetSingleton().IsPlayerSpeaking();
+                bool isGreeting = topicMgr && topicMgr->isGreetingPlayer;
+                bool isGoodbye = topicMgr && topicMgr->forceGoodbye;
+
+                // Only tear down self-dialogue state if dialogue is genuinely ending,
+                // NOT during transient Scaleform menu hide events while lines are playing
+                if (isGoodbye || (!isSpeaking && !isGreeting && (!topicMgr || !topicMgr->menuOpen))) {
+                    _inSelfDialogue.store(false, std::memory_order_release);
+                    auto* puppet = ImpersonationManager::GetSingleton().GetPuppet();
+                    auto* donor = ImpersonationManager::GetSingleton().GetDonor();
+                    if (puppet && donor) {
+                        auto* extraFaction = puppet->extraList.GetByType<RE::ExtraFactionChanges>();
+                        if (extraFaction) {
+                            for (const auto& fRank : extraFaction->factionChanges) {
+                                if (fRank.faction) {
+                                    donor->AddToFaction(fRank.faction, fRank.rank);
+                                }
+                            }
+                            extraFaction->factionChanges.clear();
+                        }
                     }
-                    if (topicMgr->lastSpeaker == puppetHandle) {
-                        topicMgr->lastSpeaker.reset();
+                    if (topicMgr && puppet) {
+                        auto puppetHandle = puppet->GetHandle();
+                        if (topicMgr->speaker == puppetHandle) {
+                            topicMgr->speaker.reset();
+                        }
+                        if (topicMgr->lastSpeaker == puppetHandle) {
+                            topicMgr->lastSpeaker.reset();
+                        }
                     }
                 }
             }
@@ -464,7 +472,7 @@ namespace AlternateActors {
 
     bool IdleAIManager::IsInSelfDialogue() const {
         auto* topicMgr = RE::MenuTopicManager::GetSingleton();
-        if (topicMgr && (topicMgr->forceGoodbye || topicMgr->shutMenu || topicMgr->closeInProgress)) {
+        if (topicMgr && topicMgr->forceGoodbye) {
             return false;
         }
 
